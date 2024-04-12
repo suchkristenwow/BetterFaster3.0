@@ -1,0 +1,6 @@
+debug/
+sim_utils/debugFeatureDetection_images/
+sim_utils/fake_data/
+sim_utils/intermediate_pickles/
+sim_utils/postProcessingResults/ 
+observation_err_imgs/

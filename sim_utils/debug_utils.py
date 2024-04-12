@@ -123,6 +123,7 @@ def parse_gt_lm_data(results_dir,experiment,type):
 def wrap_to_pi(angle):
     return np.arctan2(np.sin(angle), np.cos(angle))
 
+'''
 if __name__ == "__main__":
     results_dir = "/media/kristen/easystore2/BetterFaster2.0/run_carla_experiments/empty_map_results"
     orb_dir = "/media/kristen/easystore2/ORB_feat_extraction/empty_map_results_orb_feats"
@@ -172,3 +173,38 @@ if __name__ == "__main__":
         ax.scatter(orb_pts[idx,0],orb_pts[idx,1],c="green",marker="o",s=6)
     
     plt.show()
+
+'''
+
+import tkinter as tk
+from PIL import Image, ImageTk
+
+def get_pixel_rgb(event):
+    x, y = event.x, event.y
+    rgb = get_pixel_color(loaded_image, x, y)
+    print(f"RGB Value at ({x}, {y}): {rgb}")
+
+def get_pixel_color(image, x, y):
+    # Convert the PhotoImage object to a PIL Image
+    pil_image = Image.open(image_path)
+    rgb = pil_image.getpixel((x, y))
+    return rgb
+
+# Create a Tkinter window
+root = tk.Tk()
+root.title("Image Pixel RGB Viewer")
+
+# Load your image
+image_path = "/media/kristen/easystore1/BetterFaster2.0/run_carla_experiments/empty_map_results/ss_images/experiment1_0496_10.png"
+loaded_image = ImageTk.PhotoImage(Image.open(image_path))
+
+# Create a Canvas widget to display the image
+canvas = tk.Canvas(root, width=loaded_image.width(), height=loaded_image.height())
+canvas.create_image(0, 0, anchor=tk.NW, image=loaded_image)
+canvas.pack()
+
+# Bind a click event to the canvas
+canvas.bind("<Button-1>", get_pixel_rgb)
+
+# Start the main loop
+root.mainloop()
