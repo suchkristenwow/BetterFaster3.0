@@ -1,18 +1,11 @@
-import numpy as np 
+def last_index_of_change(lst):
+    for i in range(len(lst) - 1, 0, -1):
+        if lst[i] != lst[i - 1]:
+            return i
+    return -1  # If there is no change
 
-lms_i= np.array([[ 20,  10,   5],
- [ 21, -10,   3],
- [ 22, -10,  -5],
- [ 23,  10,  -5],
- [ 24,   6,   3],
- [ 25,  -8,  12],
- [ 26,   0, -11]])  
+# Example usage:
+my_list = [0, 0, 1]
+last_change_index = last_index_of_change(my_list)
+print("Last index of change:", last_change_index)
 
-tmp = lms_i[:,1:]
-lm_id_pos = np.array([  0, -11])
-
-i0 = [i for i,x in enumerate(lms_i[:,1]) if x == lm_id_pos[0]]
-i1 = [i for i,x in enumerate(lms_i[:,2]) if x == lm_id_pos[1]]
-idx = [x for x in i0 if x in i1][0]
-
-print("idx: ",idx)

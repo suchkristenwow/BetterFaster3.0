@@ -7,8 +7,8 @@ from scipy.spatial.transform import Rotation
 import re 
 
 def get_reinitted_id(all_data_associations,n,id_): 
-    print("getting reinitted_id!")
-    print("this is n:",n)
+    #print("getting reinitted_id!")
+    #print("this is n:",n)
     if n == 1:
         #print("n is one... returning this id: ",id_)
         return id_
@@ -27,11 +27,13 @@ def get_reinitted_id(all_data_associations,n,id_):
             all_data_associations[exp+1] = np.genfromtxt(data_association_filepath)
 
     #print("all_data_associaitons: ",all_data_associations)
-    #want to see if this landmark existed in experiments before this 
+    #want to see if this landmark existed in experiments before this    
+    '''
     print("getting reinitted id...")
     print("id_:",id_)
     print("all_data_associations[n]:",all_data_associations[n])
     print("this is n:",n)
+    ''' 
     
     if id_ in all_data_associations[min(all_data_associations.keys())][:,0]:
         '''
@@ -56,14 +58,14 @@ def get_reinitted_id(all_data_associations,n,id_):
     i = n - 1
     c = 0 
     while 1 <= i:
-        print("i:",i)
+        #print("i:",i)
         lms_i = all_data_associations[i] 
-        print("lms_i ",lms_i)
-        print("lm_id_pos: ",lm_id_pos)
+        #print("lms_i ",lms_i)
+        #print("lm_id_pos: ",lm_id_pos)
         row_idx = complicated_function(lms_i,lm_id_pos)
         if not row_idx is None:
             reinitted_id = lms_i[row_idx,0] 
-        print("reinitted_id: ",reinitted_id)
+        #print("reinitted_id: ",reinitted_id)
         '''
         else:
             if not reinitted_id is None: 
@@ -86,8 +88,8 @@ def get_reinitted_id(all_data_associations,n,id_):
     return int(reinitted_id )
 
 def complicated_function(lms_i,lm_id_pos):
-    print("lms_i: ",lms_i)
-    print("lm_id_pos: ",lm_id_pos)
+    #print("lms_i: ",lms_i)
+    #print("lm_id_pos: ",lm_id_pos)
     lm_id_pos = lm_id_pos[0,0]
     i0 = [i for i,x in enumerate(lms_i[:,1]) if x == lm_id_pos[0]]
     i1 = [i for i,x in enumerate(lms_i[:,2]) if x == lm_id_pos[1]]

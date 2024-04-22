@@ -5,6 +5,8 @@ sys.path.append("../betterTogether")
 import numpy as np 
 import os 
 from utils import get_sim_length, get_reinitted_id
+import time 
+import pickle 
 
 class PerformanceTracker:
     def __init__(self,n_experiments,data_associations=None):
@@ -56,9 +58,9 @@ class PerformanceTracker:
         self.gt_clique_persistence = {}
         self.all_data_associations = {}
         self.n_experiments = n_experiments
-        print("in performance... getting data associations....")
+        #print("in performance... getting data associations....")
         for n in range(1,n_experiments+1):
-            print("this is exp no:{}...".format(n))
+            #print("this is exp no:{}...".format(n))
             if not self.results_dir is None:
                 #dir_n = os.path.join(self.results_dir,"exp"+str(n)+"_results")
                 data_associations_path = os.path.join(results_dir,"data_association/experiment"+str(n)+"data_association.csv")
@@ -67,11 +69,11 @@ class PerformanceTracker:
                     if not os.path.exists(data_associations_path):
                         print("data_associations_path:",data_associations_path)
                         raise OSError
-                print("data_associations_path: ",data_associations_path)
+                #print("data_associations_path: ",data_associations_path)
                 data_associations = np.genfromtxt(data_associations_path)
                 if np.isnan(data_associations[:,0].any()):
                     data_associations = np.genfromtxt(data_associations_path,delimiter=" ")
-                    print("this is data_associations: ",data_associations)
+                    #print("this is data_associations: ",data_associations)
             else:
                 if data_associations is None:
                     raise OSError
@@ -81,15 +83,15 @@ class PerformanceTracker:
                 self.all_data_associations[n] = data_associations
                 #print("assigning data_associations to self.all_data_associations... this is n:",n)
             #sanity check
-            print("checking the data associations....")
+            #print("checking the data associations....")
             for x in self.all_data_associations.keys():
                 #print("checking what we've set... this is n:",x)
                 tmp = self.all_data_associations[x] 
-                print("tmp:",tmp)
+                #print("tmp:",tmp)
                 if np.isnan(tmp).any():
                     raise OSError
             exp_clique_ids = data_associations[:,0]
-            print("exp_clique_ids: ",exp_clique_ids)
+            #print("exp_clique_ids: ",exp_clique_ids)
             if n > 1 and self.results_dir is not None:
                 for i,id_ in enumerate(exp_clique_ids):
                     #get_reinitted_id(all_data_associations,n,id_)
@@ -99,6 +101,8 @@ class PerformanceTracker:
                         exp_clique_ids[i] = orig_id
             self.gt_clique_persistence[n] = exp_clique_ids
             #print("this is all_data_associations: ",self.all_data_associations[n]) 
+        with open(os.path.join(self.results_dir,"gt_gstates.pickle"),"rb") as handle:
+            self.gt_gstates = pickle.load(handle)
         self.acceptance_threshold = None 
         self.rejection_threshold = None 
         self.posteriors = None 
@@ -121,31 +125,9 @@ class PerformanceTracker:
         self.comparison_accuracies = {} 
         self.comparison_best_traj_estimates = {}
         self.comparison_best_landmark_estimates = {}
-        self.growth_state_estimates = None 
+        self.growth_state_estimates = {} 
         self.comparison_growth_state_estimates = {} 
-
-    '''
-        def get_reinitted_ids(self,n,id_): 
-        #want to see if this landmark existed in experiments before this 
-        print("getting reinitted id.... this is id_:",id_)
-        idx = np.where(self.all_data_associations[n][:,0] == id_)
-        lm_id_pos = self.all_data_associations[n][idx,1:]
-        print("lm_id_pos: ",lm_id_pos)
-        reinitted_id = None 
-        i = n - 1
-        while 1 <= i:
-            tmp = self.all_data_associations[i] 
-            lms_i = tmp[:,1:]
-            row_idx = np.where(np.all(lms_i == lm_id_pos, axis=1))[0]
-            if row_idx.size > 0:
-                print("this lm existed in the previous experiment")
-                reinitted_id = self.all_data_associations[i][row_idx,0]
-                return reinitted_id
-            else:
-                print("this lm did not exist in this experiment") 
-                i -= 1
-                break
-    '''
+        self.processing_times = []
 
     def init_new_experiment(self,experiment_no,clique,slam,compare_betterTogether,compare_multiMap,compare_vanilla):
         self.clique_inst = clique 
@@ -166,15 +148,18 @@ class PerformanceTracker:
         self.comparison_particles[type_] = slam.particles 
 
     def update_clique_posteriors(self,t,clique,type_=None):
+        exp = self.current_exp
         if type_ is None:
             self.clique_inst = clique 
             self.posteriors = clique.posteriors
-            self.growth_state_estimates = clique.growth_state_estimates 
+            self.growth_state_estimates[exp] = clique.growth_state_estimates 
         else:
             self.comparison_sim_instance[type_] = clique 
             self.comparison_particles[type_] = clique.posteriors 
-            self.comparison_growth_state_estimates[type_] = clique.growth_state_estimates 
-
+            if type_ not in self.comparison_particles.keys():
+                self.comparison_growth_state_estimates[type_] = {} 
+            self.comparison_growth_state_estimates[type_][exp] = clique.growth_state_estimates 
+            
         #want to update accuracy of persistence
         for c in clique.posteriors.keys():
             posterior_c = clique.posteriors[c][t]
@@ -309,11 +294,35 @@ class PerformanceTracker:
                 self.comparison_best_landmark_estimates[type_][id_]["mu"] = best_landmark_estimates[idx].EKF.mu 
                 self.comparison_best_landmark_estimates[type_][id_]["covar"] = best_landmark_estimates[idx].EKF.Sigma 
     
-    def update(self,t,clique,slam,type_=None):
+                    #t,clique_sim,slam,processing_time
+    def update(self,t,clique,slam,processing_time,type_=None):
         '''
         want to save best trajectory estimate, landmark location estimates
         want to save the posteriors
         '''
-        self.update_clique_posteriors(t,clique,type_)
+        if clique is None:
+            raise OSError 
+        
+        if not processing_time is None:
+            self.processing_times.append(processing_time) 
+        total_tsteps = self.sim_length * self.n_experiments 
+        completed_tsteps =  (self.current_exp - 1)*self.sim_length + t 
+        percent_done = 100*completed_tsteps/total_tsteps  
+        print("We are {} percent done!".format(np.round(percent_done,2)))
+        if len(self.processing_times) > 10:
+            remaining_experiments = self.n_experiments - self.current_exp
+            remaining_tsteps = self.sim_length - t  
+            mean_secs_tstep = np.mean(self.processing_times)
+            secs_remaining_for_this_exp = mean_secs_tstep * remaining_tsteps
+            secs_remaining_for_all_exp = remaining_tsteps * self.sim_length * mean_secs_tstep 
+            total_secs_remaining = secs_remaining_for_all_exp + secs_remaining_for_this_exp
+            total_min_remaining = total_secs_remaining / 60 
+            if total_min_remaining > 100: 
+                total_hours_remaining = total_min_remaining / 60  
+                print("About {} hours remaining...".format(np.round(total_hours_remaining,3))) 
+            else:
+                print("About {} minutes remaining...".format(np.round(total_min_remaining,1)))
+        #exp,t,clique
+        #self.update_clique_posteriors(t,clique,type_)
+        self.update_clique_posteriors(t,clique)
         self.slam_update(t,slam,type_)
-

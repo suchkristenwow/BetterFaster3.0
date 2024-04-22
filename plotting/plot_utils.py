@@ -1,10 +1,13 @@
 import numpy as np 
 import matplotlib.pyplot as plt 
+from matplotlib.patches import Ellipse
 from matplotlib.animation import FuncAnimation
 import os 
 import sys 
 sys.path.append('../sim_utils') 
 from utils import get_reinitted_id 
+
+
 
 class betterFaster_plot:
     def __init__(self,exp,sim_length,results_dir,gt_car_traj,observed_clique_ids,compare_betterTogether,compare_multiMap,compare_vanilla,
@@ -49,7 +52,7 @@ class betterFaster_plot:
             data_assocation_files = os.listdir(os.path.join(results_dir,"data_associations"))  
 
         for file in data_assocation_files:
-            print("this is file: ",file)
+            #print("this is file: ",file)
             try:
                 idx0 = 10; idx1 = -20 
                 #print("file[idx0:idx1]: ",file[idx0:idx1])
@@ -58,15 +61,15 @@ class betterFaster_plot:
                 idx0 = 3; idx1 = -21
                 #print("file[idx0:idx1]: ",file[idx0:idx1])
                 exp = int(file[idx0:idx1])
-            print("this is exp: ",exp)
+            #print("this is exp: ",exp)
             try:
                 all_data_associations[exp] = np.genfromtxt(os.path.join(results_dir,"data_association/" + file),delimiter=" ")
-                print("this is data_association path: ",os.path.join(results_dir,"data_association/" + file))
+                #print("this is data_association path: ",os.path.join(results_dir,"data_association/" + file))
             except: 
-                print("this is the exception")
+                #print("this is the exception")
                 data_association_path = os.path.join(results_dir,"data_associations/exp"+str(exp)+"_data_association.csv") 
-                print("this is data_association_path:",data_association_path )
-                print("data association result: ",np.genfromtxt(data_association_path,delimiter=" "))
+                #print("this is data_association_path:",data_association_path )
+                #print("data association result: ",np.genfromtxt(data_association_path,delimiter=" "))
                 all_data_associations[exp+1] = np.genfromtxt(data_association_path,delimiter=" ") 
 
         if not np.array_equal(all_data_associations[self.exp],data_association):
@@ -74,6 +77,8 @@ class betterFaster_plot:
             print("data_association:",data_association)
             print("im confusion")
             raise OSError
+        
+        self.all_data_associations = all_data_associations
         '''
         for x in data_association[:,0]:
             print("this is x:",x)
@@ -105,8 +110,9 @@ class betterFaster_plot:
         #extract ground truth trajectory 
         self.gt_traj = gt_car_traj 
         self.traj_estimate_cache = np.zeros((sim_length,3))
+        self.sim_length = sim_length 
 
-    def plot_state(self,t,robot_pose, observations_t, posteriors):
+    def plot_state(self,slam,t,robot_pose, observations_t, posteriors):
         #print("entering plot state...")
         self.ax.clear()
         self.ax.set_xlim(self.ax_bounds[0],self.ax_bounds[1])
@@ -116,9 +122,18 @@ class betterFaster_plot:
         self.ax.scatter(robot_pose[0],robot_pose[1],color="k",s=5)
 
         observed_clique_ids_t = np.array(np.unique([int(x["clique_id"]) for x in observations_t]))
+        #print("this is observed clique ids at this timestep: ",observed_clique_ids_t)
         for clique_id in observed_clique_ids_t:
+            #print("updating observations_cache for clique_id: ",clique_id)
             idx = self.observed_clique_ids.index(clique_id)
+            #print("this is idx:",idx)
+            if not isinstance(idx,int):
+                raise OSError
             self.observations_cache[t,idx] = 1
+            '''
+            print("this is t: ",t)
+            print("self.observations_cache[t,idx]: ",self.observations_cache[t,idx])
+            '''
 
         #plot the frustrum
         self.plot_frustrum(robot_pose)
@@ -131,12 +146,13 @@ class betterFaster_plot:
             print("self.gt_trees: ",self.gt_trees)
             '''
             for i in range(len(self.gt_trees)): 
-                if self.gt_trees[i,0] in self.observed_clique_ids:
-                    self.ax.scatter(self.gt_trees[i,1],self.gt_trees[i,2],color='green', marker='*')
+                #if self.gt_trees[i,0] in self.observed_clique_ids:
+                self.ax.scatter(self.gt_trees[i,1],self.gt_trees[i,2],color='green', marker='*')
 
             for i in range(len(self.gt_trees)):
-                #if self.gt_trees[i,0] in observed_clique_ids_t:
-                self.ax.text(self.gt_trees[i,1],self.gt_trees[i,2],str(int(self.gt_trees[i,0])),fontsize=8,color="k",ha='center', va='center')
+                #all_data_associations,n,id_)
+                reinitted_id = get_reinitted_id(self.all_data_associations,self.exp,self.gt_trees[i,0])
+                self.ax.text(self.gt_trees[i,1],self.gt_trees[i,2],str(reinitted_id),fontsize=8,color="k",ha='center', va='center')
 
         else:
             print("WARNING no trees")
@@ -149,12 +165,13 @@ class betterFaster_plot:
             print("self.gt_cones: ",self.gt_trees)
             '''
             for i in range(len(self.gt_cones)):
-                if self.gt_cones[i,0] in self.observed_clique_ids:
-                    self.ax.scatter(self.gt_cones[i,1],self.gt_cones[i,2],color="orange",marker="^")
+                #if get_reinitted_id(self.gt_cones[i,0]) in self.observed_clique_ids:
+                self.ax.scatter(self.gt_cones[i,1],self.gt_cones[i,2],color="orange",marker="^")
 
             for i in range(len(self.gt_cones)):
-                #if self.gt_cones[i,0] in observed_clique_ids_t:
-                self.ax.text(self.gt_cones[i,1],self.gt_cones[i,2],str(int(self.gt_cones[i,0])),fontsize=8,color="k",ha='center', va='center')
+                #all_data_associations,n,id_)
+                reinitted_id = get_reinitted_id(self.all_data_associations,self.exp,self.gt_cones[i,0]) 
+                self.ax.text(self.gt_cones[i,1],self.gt_cones[i,2],str(reinitted_id),fontsize=8,color="k",ha='center', va='center')
             
         else:
             print("WARNING no cones ")
@@ -188,9 +205,39 @@ class betterFaster_plot:
 
         #plot the observations 
         self.plot_observations(robot_pose,observations_t) 
-        
+
+        #self.plot_lm_ellipsoids(slam)
+
         self.plot_posteriors(t,posteriors,observations_t)
-        #plt.show(block=True)
+        plt.show(block=True)
+        '''
+        fig, ax = plt.subplots()
+        self.posterior_cache = []
+        self.observations_cache = np.zeros((sim_length,len(observed_clique_ids)))
+        self.fig = fig; self.ax = ax 
+        self.posterior_fig, self.posterior_ax = plt.subplots(nrows=1, ncols=5, figsize=(24, 4))
+        '''
+        if t == self.sim_length - 1:
+            plt.close(self.fig) 
+            plt.close(self.posterior_fig) 
+
+    def plot_lm_ellipsoids(self,slam): 
+        idx = np.argmax([x.weight for x in slam.particles]) 
+        best_landmarks = slam.particles[idx].landmark 
+
+        for lm in best_landmarks:
+            lm_EKF = lm.EKF 
+            center = lm_EKF.mu  
+            if not np.all(center == 0):
+                #print("lm_id: {}, center_estimate: {}".format(lm.lm_id,center))
+                self.ax.scatter(center[0],center[1],color="blue",s=2)
+                self.ax.text(center[0] - 0.1,center[1] + 0.1,str(lm.lm_id),fontsize=8,color="blue",ha='center',va='center')
+                eigenvalues,eigenvectors = np.linalg.eigh(lm_EKF.Sigma) 
+                angle = np.degrees(np.arctan2(*eigenvectors[:, 0][::-1])) 
+                # Create the ellipse
+                ellipse = Ellipse(xy=center, width=2*np.sqrt(eigenvalues[0]), height=2*np.sqrt(eigenvalues[1]),angle=angle,color="k")
+                self.ax.add_patch(ellipse) 
+        plt.pause(0.05)
 
     def plot_posteriors(self,t,posteriors_t,observations_t):
         #self.posterior_fig, self.posterior_ax
@@ -208,6 +255,7 @@ class betterFaster_plot:
         plot_cache = np.array(self.posterior_cache)
 
         observed_cliques_t = np.unique([x["clique_id"] for x in observations_t]) 
+        #print("observed_cliques_t: ",observed_cliques_t)
 
         # Plot something in each subplot
         for i, ax in enumerate(self.posterior_ax):
@@ -220,26 +268,52 @@ class betterFaster_plot:
                 ax.set_xlim(0,x_bound)
                 ax.set_ylim(-0.1,1.1)
                 clique_id = observed_cliques_t[i]
-                #print("plotting clique_id posteriors:",clique_id)
-                idx = sorted(posteriors_t.keys()).index(clique_id)
+                #print("plotting clique_id posteriors... this is clique id:",clique_id)
+                idx = sorted(posteriors_t.keys()).index(clique_id) 
+                #print("idx:",idx)
                 ax.set_title("Posteriors for Clique " + str(clique_id))
-                ax.plot(np.arange(t+1),plot_cache[:,idx],color="k")
-                ax.scatter(t,plot_cache[t,idx],color="r",marker="*")
+                if len(np.arange(t+1)) != len(plot_cache[:,idx]):
+                    #print("len(plot_cache[:idx]): ",len(plot_cache[:idx])) 
+                    t_prime = t + 1 - len(plot_cache[:,idx])
+                    #print("len(np.arange(t_prime,t+1)): ",len(np.arange(t_prime,t+1))) 
+                    #print("this is t: {}, and this is t_prime: {}".format(t,t_prime))
+                    ax.plot(np.arange(t_prime,t+1),plot_cache[:,idx],color="k")
+                    #print("plot_cache[:,idx]:",plot_cache[:,idx])
+                    ax.scatter(t,plot_cache[-1,idx],color="r",marker="*")
+                else: 
+                    ax.plot(np.arange(t+1),plot_cache[:,idx],color="k")
+                    ax.scatter(t,plot_cache[t,idx],color="r",marker="*")
+                    '''
+                    print("this is t: ",t)
+                    print("plot_cache: ",plot_cache)
+                    print("plot_cache[t,idx]: ",plot_cache[t,idx])
+                    '''
+                    
                 #print("plot_cache[t,idx]:",plot_cache[t,idx])
                 ax.plot(np.arange(self.sim_length),np.ones((self.sim_length,))*0.9,color="red",linestyle="--")
                 ax.plot(np.arange(self.sim_length),np.ones((self.sim_length,))*0.5,color="blue",linestyle="--")
 
-                landmark_observed = self.observations_cache[:,i]
+                idx = self.observed_clique_ids.index(clique_id)
+                landmark_observed = self.observations_cache[:,idx]
+
                 start_idx = None
                 for j, observed in enumerate(landmark_observed):
+                    '''
+                    if j == t:
+                        #print("at this time this is observed for this landmark: ",landmark_observed[t])
+                    '''
                     if observed == 1 and start_idx is None:
                         start_idx = j 
+                        #print("updated start idx to: ",start_idx)
                     elif observed == 0 and start_idx is not None:
+                        #print("start_idx is not none: ",start_idx)
                         rect = plt.Rectangle((start_idx, 0), j - start_idx, 1, alpha=0.25, color='blue')
                         ax.add_patch(rect)
                         start_idx = None
 
         '''
+        if self.exp > 1:
+            plt.show(block=True)
         clique_id = sorted(posteriors_t.keys())[i]
         if clique_id in [x["clique_id"] for x in observations_t]:
             if posteriors_t[c][t] < 0.9:
@@ -250,20 +324,28 @@ class betterFaster_plot:
 
     def plot_observations(self,robot_pose,observations_t): 
         #self.ax_bounds = (x_lower_bound,x_upper_bound,y_lower_bound,y_upper_bound)
-        #observed_clique_ids = [x["clique_id"] for x in observations_t]
+        observed_clique_ids = np.unique([x["clique_id"] for x in observations_t]) 
 
-        for observation in observations_t:
-            '''
-            if observation["clique_id"] in self.gt_trees[:,0]:
-                idx = np.where(self.gt_trees[:,0] == observation["clique_id"])
-                gt_landmark_location = np.reshape(self.gt_trees[idx,:],(3,))
+        for id_ in observed_clique_ids: 
+            observations_id = [x for x in observations_t if x["clique_id"] == id_]
+            observation_ranges = []; observation_bearings = []
+            for obs in observations_id:
+                observation_ranges.append(obs["range"])
+                observation_bearings.append(obs["bearing"]*(np.pi/180)) 
+            mean_range = np.mean(observation_ranges); mean_bearing = np.mean(observation_bearings)
+
+            observation_x = robot_pose[0] + mean_range*np.cos(mean_bearing)
+            observation_y = robot_pose[1] + mean_range*np.sin(mean_bearing)
+
+            if id_ in self.gt_trees[:,0]: 
+                self.ax.plot([robot_pose[0],observation_x],[robot_pose[1],observation_y],linestyle="-.",color="green")
+                self.ax.scatter(observation_x,observation_y,color="green",marker="x")    
             else:
-                if observation["clique_id"] not in self.gt_cones[:,0]: 
-                    #print("self.gt_cones: ",self.gt_cones)
-                    continue 
-                idx = np.where(self.gt_cones[:,0] == observation["clique_id"])
-                gt_landmark_location = np.reshape(self.gt_cones[idx,:],(3,))
-            '''
+                self.ax.plot([robot_pose[0],observation_x],[robot_pose[1],observation_y],linestyle="-.",color="orange")
+                self.ax.scatter(observation_x,observation_y,color="orange",marker="x")
+
+        '''
+        for observation in observations_t:
             r = observation["range"] 
             b = observation["bearing"] * (np.pi/180)
             #print("r: {},b:{}".format(r,b))
@@ -276,6 +358,8 @@ class betterFaster_plot:
             else:
                 self.ax.plot([robot_pose[0],observation_x],[robot_pose[1],observation_y],linestyle="-.",color="orange")
                 self.ax.scatter(observation_x,observation_y,color="orange",marker="x")
+        '''
+        
 
     def plot_frustrum(self,robot_pose): 
         #print('robot_pose: ',robot_pose)
@@ -299,8 +383,8 @@ class betterFaster_plot:
         #determine plot bounds 
         xmin = min(gt_car_traj[:,0]); xmax = max(gt_car_traj[:,0])
         ymin = min(gt_car_traj[:,1]); ymax = max(gt_car_traj[:,1])
-        print("self.gt_cones:",self.gt_cones)
-        print("self.gt_trees: ",self.gt_trees)
+        #print("self.gt_cones:",self.gt_cones)
+        #print("self.gt_trees: ",self.gt_trees)
         landmark_xmin = min([min(self.gt_cones[:,0]),min(self.gt_trees[:,0])])
         landmark_xmax = max([max(self.gt_cones[:,0]),max(self.gt_trees[:,0])])
         delta_x = landmark_xmax - landmark_xmin 

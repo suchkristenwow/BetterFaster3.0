@@ -14,11 +14,11 @@ from utils import simUtils, get_sim_length, get_reinitted_id
 from extract_gt_car_traj import get_gt_car_data
 from extract_all_possible_observations import get_second_most_recent
 import argparse 
-
+import time 
 import matplotlib.pyplot as plt 
 from matplotlib.animation import FuncAnimation
 
-def run_betterFaster(experiment_no,performance_tracker,n_experiments=12,**kwargs):
+def run_betterFaster(experiment_no,performance_tracker,**kwargs):
 	#performance_tracker = kwargs.get("performance_tracker")
 	P_Miss_detection = kwargs.get('P_Miss_detection')
 	P_False_detection = kwargs.get('P_False_detection')
@@ -47,7 +47,8 @@ def run_betterFaster(experiment_no,performance_tracker,n_experiments=12,**kwargs
 	width = kwargs.get("img_width")
 	height = kwargs.get("img_height")
 	fov = kwargs.get("fov")
-	data_association_rates = [0.3,0.6,0.9]
+	n_experiments = kwargs.get("experiments")
+	data_association_rates = [0.3,0.6,0.9] 
 
 	'''
 	all_results_dir = "/media/arpg/easystore1/BetterFaster/kitti_carla_simulator/"
@@ -89,7 +90,7 @@ def run_betterFaster(experiment_no,performance_tracker,n_experiments=12,**kwargs
 		else:
 			orig_id = id_
 		if orig_id not in observed_clique_ids:
-			print("appending this id to observed clique ids:",orig_id)
+			#print("appending this id to observed clique ids:",orig_id)
 			observed_clique_ids.append(orig_id)
 
 	#obsd_cliques[exp][t] = observations
@@ -145,16 +146,26 @@ def run_betterFaster(experiment_no,performance_tracker,n_experiments=12,**kwargs
 	n_experiments = kwargs.get("n_experiments")
 	'''
 	#initialize the sim 
+	#clique growth state shit 
+	T_nu_cone = 9 
+	T_nu_tree = 3
+
 	if experiment_no == 1:
+		#cone survival time 
+		#tree survival time 
+		#cones: [0,1]
+		#trees: [0 (dead),1,2,3]
 		clique_sim = clique_simulator(P_Miss_detection=P_Miss_detection,P_False_detection=P_False_detection,acceptance_threshold=detection_threshold,rejection_threshold=rejection_threshold,
 						min_feats=min_feats,max_feats=max_feats,clique_features=all_clique_feats,confidence_range=confidence_range,tune=False,observed_clique_ids=observed_clique_ids,
-						observations=exp_observations,sim_length=sim_length,lambda_u=lambda_u,data_association=data_association,experiment_no=experiment_no,n_experiments=n_experiments)
+						observations=results_dir,sim_length=sim_length,lambda_u=lambda_u,data_association=data_association,experiment_no=experiment_no,n_experiments=n_experiments,
+						survival_time_cone=T_nu_cone,survival_time_tree=T_nu_tree)
 	else:
 		if load_prev_results:
 				#whatever
 				clique_sim = clique_simulator(P_Miss_detection=P_Miss_detection,P_False_detection=P_False_detection,acceptance_threshold=detection_threshold,rejection_threshold=rejection_threshold,
 						min_feats=min_feats,max_feats=max_feats,clique_features=all_clique_feats,confidence_range=confidence_range,tune=False,observed_clique_ids=observed_clique_ids,
-						observations=exp_observations,sim_length=sim_length,lambda_u=lambda_u,data_association=data_association,experiment_no=experiment_no,n_experiments=n_experiments)
+						observations=results_dir,sim_length=sim_length,lambda_u=lambda_u,data_association=data_association,experiment_no=experiment_no,n_experiments=n_experiments,
+						survival_time_cone=T_nu_cone,survival_time_tree=T_nu_tree)
 		else: 
 			clique_sim = performance_tracker.clique_inst 
 			#reinit_experiment(self,exp,observations):
@@ -165,6 +176,7 @@ def run_betterFaster(experiment_no,performance_tracker,n_experiments=12,**kwargs
 					betterTogether_sims[data_association_rate] = performance_tracker.comparison_sim_instance["untuned"+str(data_association_rate)]
 					betterTogether_sims[data_association_rate].reinit_experiment(experiment_no,exp_observations)
 
+	print("this is clique sim after initialization: ",clique_sim)
 	'''
 	if compare_multiMap:
 		#init multimap 
@@ -212,8 +224,11 @@ def run_betterFaster(experiment_no,performance_tracker,n_experiments=12,**kwargs
 	else: 
 		tsteps = last_t 
 	'''
+	processing_time = None 
+
 	for t in range(tsteps): 
 		print("this is t: ",t)
+		t0 = time.time()
 		#print("gt_car_traj: ",[gt_car_traj[t,0],gt_car_traj[t,1],gt_car_traj[t,5]])
 		if gt_car_traj.shape[1] == 7:
 			estimated_pose = slam.prediction([gt_car_traj[t,0],gt_car_traj[t,1],gt_car_traj[t,5]]) #x,y,yaw
@@ -231,13 +246,15 @@ def run_betterFaster(experiment_no,performance_tracker,n_experiments=12,**kwargs
 		else:
 			#observations_t = sim_utils.reform_observations(t,np.array([gt_car_traj[t,0],gt_car_traj[t,1],gt_car_traj[t,2]]),carla_observations_t)  
 			observations_t = carla_observations_t 
+			'''
 			#print("observations_t:",observations_t)
 			observed_clique_ids_t = np.unique([x["clique_id"] for x in observations_t])
-			print("observed_clique_ids_t: ",observed_clique_ids_t)
+			#print("observed_clique_ids_t: ",observed_clique_ids_t)
 			for id_ in observed_clique_ids_t: 
 				obsd_features = [x["feature_id"] for x in observations_t if x["clique_id"] == id_]
-				print("for clique {} we observed these features in this timestep: {}".format(id_,obsd_features))
-
+				#print("for clique {} we observed these features in this timestep: {}".format(id_,obsd_features))
+			'''
+		print("clique_sim before update: ",clique_sim)
 		persistent_observations = clique_sim.update(t,observations_t)
 
 		'''
@@ -253,12 +270,14 @@ def run_betterFaster(experiment_no,performance_tracker,n_experiments=12,**kwargs
 			vanilla_observations = 
 		'''
 
-		slam.correction(t,persistent_observations)
-		performance_tracker.update(t,clique_sim,slam)
+		slam.correction(t,persistent_observations)	
 
-		plotter.plot_state(t,estimated_pose,observations_t,clique_sim.posteriors)
+		print("clique_sim: ",clique_sim)
+		performance_tracker.update(t,clique_sim,slam,processing_time)
+
+		plotter.plot_state(slam,t,estimated_pose,observations_t,clique_sim.posteriors)
+		processing_time = time.time() - t0 
 		plt.pause(0.05)
-		
 		
 	if not skip_writing_files:
 		#save posteriors
@@ -323,7 +342,7 @@ def parse_arguments():
 	parser.add_argument("--sensor_noise_variance", type=float, default=0.1, help="Sensor noise variance")
 	parser.add_argument("--confidence_range", type=int, default=50, help="Confidence range")
 	parser.add_argument("--negative_supression", type=bool, default=True)
-	parser.add_argument("--skip_writing_files", type=bool, default=True, help="Skip writing files")
+	parser.add_argument("--skip_writing_files", type=bool, default=False, help="Skip writing files")
 	#parser.add_argument("--experiment_no", type=int, default=1)
 	parser.add_argument("--n_particles", type=int, default=10)
 	parser.add_argument("--complete_experiments", type=bool, default=True)
@@ -395,7 +414,6 @@ if __name__ == "__main__":
 			data_association[exp] = np.genfromtxt(filepath)
 
 		'''
-		
 	performance_tracker = PerformanceTracker(args.experiments,data_associations=data_association)
 
 	'''
@@ -405,5 +423,5 @@ if __name__ == "__main__":
 		localization_covariance=localization_covariance,skip_writing_files=skip_writing_files,min_feats=min_feats,max_feats=max_feats,n_particles=10,
 		img_width=img_width,img_height=img_height,fov=fov,performance_tracker=performance_tracker,lambda_u=lambda_u,complete_experiments=False,last_t=1000)
 	'''
-	for exp in range(args.experiments +1): 
+	for exp in range(args.experiments): 
 		run_betterFaster(exp+1,performance_tracker,**vars(args))

@@ -66,6 +66,7 @@ class PersistenceFilter:
     
     # do pairwise filtering
     #print("len(self_log_likelihood): {}".format(len(self._log_likelihood))) 
+    #print("self._last_observation_time: ",self._last_observation_time)
     for i in range(len(self._log_likelihood)):
         #Update the lower sum LY
         if self._log_lower_evidence_sum[i,i] is not None:

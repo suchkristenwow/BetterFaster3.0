@@ -348,15 +348,15 @@ if __name__ == "__main__":
         os.mkdir(os.path.join(results_dir,"data_associations"))
 
     for exp in range(experiments):
-        print("this is exp: ",exp)
+        #print("this is exp: ",exp)
         if exp > 0:
             gt_lm_copy = gt_lms.copy()
-            print("gt_lm_copy.shape: ",gt_lm_copy.shape)
+            #print("gt_lm_copy.shape: ",gt_lm_copy.shape)
             for i in range(gt_lms.shape[0]): 
                 if persistence[exp,i]:
                     idx = np.where(gt_lm_copy[:,0] == i)
                     gt_lm_copy[idx,0] = random_array[exp] + i  
-                    print("changed the gt lm array id to: ",random_array[exp] + i)
+                    #print("changed the gt lm array id to: ",random_array[exp] + i)
                     if i in tree_ids:
                         with open(os.path.join(results_dir,"tree_ids/experiment"+str(exp+1)+"tree_ids_.txt"),"a") as f:
                             f.write(str(random_array[exp] + i) + "\n") 
@@ -366,14 +366,16 @@ if __name__ == "__main__":
                             f.write(str(random_array[exp] + i) + "\n") 
                         f.close() 
                 else:                
+                    '''
                     print("This lm does not persist")
                     print("this is i: ",i)
                     print("gt_lms[:,0]: ",gt_lms[:,0])
+                    '''
                     idx = np.where(gt_lms[:,0] == i)
-                    print("idx: ",idx)
+                    #print("idx: ",idx)
                     gt_lm_copy = np.delete(gt_lm_copy, idx, axis=0)
-                    print("gt_lm_copy:",gt_lm_copy)
-                    print("this is gt_lms: ",gt_lms)
+                    #print("gt_lm_copy:",gt_lm_copy)
+                    #print("this is gt_lms: ",gt_lms)
             if gt_lms.shape[0] != 7:
                 raise OSError
             path = os.path.join(results_dir,"data_associations/exp" +str(exp)+"_data_association.csv")
