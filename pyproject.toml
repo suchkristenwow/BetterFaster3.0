@@ -1,0 +1,20 @@
+[build-system]
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "betterFaster"
+version = "0.1.0"
+description = "A project for tree of thought robot guided exploration"
+authors = [
+    { name = "Kristen Such", email = "kristen.such@colorado.edu" }
+]
+packages = [
+    { include = "betterFaster" },
+    { include = "betterFaster.betterTogether" },
+    { include = "betterFaster.comparisonMethods" },
+    { include = "betterFaster.configs" },
+    { include = "betterFaster.plotting" },
+    { include = "betterFaster.sim_utils" },
+    { include = "betterFaster.SLAMCore" }
+]
