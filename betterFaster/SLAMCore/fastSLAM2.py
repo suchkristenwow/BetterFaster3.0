@@ -1,7 +1,7 @@
 import numpy as np
 import scipy  
 import os
-
+import threading 
 from .ekf_filter_utils import *
 
 class ekf_filter(): 
@@ -17,7 +17,7 @@ class ekf_filter():
 
 	def update(self,z,x):
 		#print("entering EKF update...")
-		init_mu = [x for x in self.mu]
+		#init_mu = [x for x in self.mu]
 		#print("this is mu: ",self.mu)
 		#print("this is the pose: ",x)
 		zhat = self.hfun(self.mu[0],self.mu[1],x)
@@ -55,10 +55,10 @@ class fast_slam_particle():
 
 class fastSLAM2():
 	#n_particles,localization_covariance,observed_clique_ids
-	def __init__(self,n_particles,init_state_covar,lm_ids,gt_lms):
+	def __init__(self,n_particles,gt_init_state,init_state_covar,lm_ids,gt_lms):
 		self.n = n_particles 
-		self.mu = np.zeros((3,))
 		self.Sigma = init_state_covar
+		self.mu = np.random.multivariate_normal(gt_init_state,self.Sigma)
 		betas    = [1.25, 2, 0.175]
 		self.Qt = np.dot(betas[0],np.array([[betas[1]**2,np.random.rand()],[np.random.rand(),betas[2]**2]]))
 		#initializing the particles
@@ -78,68 +78,49 @@ class fastSLAM2():
 		for k in range(self.n):
 			self.particles[k].pose = np.random.multivariate_normal(pose,self.Sigma)
 		best_idx = np.argmax([self.particles[k].weight for k in range(self.n)])
-		'''
-		if self.particles[best_idx].pose[2] < 89:
-			print("debugging the first timestep")
-			print("this is pose: ",self.particles[best_idx].pose)
-			raise OSError 
-		'''
 		self.particles[best_idx].pose[2] = np.deg2rad(self.particles[best_idx].pose[2])
 		return self.particles[best_idx].pose
 	
-	def correction(self,t,z):
-		for k in range(self.n):
-			if not "None" in str(type(z)):
-				for j in range(len(z)):
-					#original_observation = [z[j]['range'], z[j]['bearing']]
-					z_t = [z[j]['range'], z[j]['bearing']*(np.pi/180)]
-					idx = np.where(self.gt_lms[:,0] == z[j]["clique_id"]) 
-					if not np.isnan(z[j]['bearing']) and not np.isnan(z[j]['range']):
-						id_ = z[j]['clique_id']
-						if id_ in [x.lm_id for x in self.particles[k].landmark]:
-							idx_lm = [i for i,x in enumerate(self.particles[k].landmark) if x.lm_id == id_][0]
-							if not self.particles[k].landmark[idx_lm].isobserved:
-								mean_init = self.h_inv(z_t,self.particles[k].pose)
-								#mean_init = self.h_inv(z_t,tmp_pose)
-								H = self.Hfun(mean_init[0],mean_init[1],self.particles[k].pose,z_t)
-								#H = self.Hfun(mean_init[0],mean_init[1],tmp_pose,z_t)
-								H_inv = np.identity(2) / H 
-								cov_init = H_inv @ self.Qt @ H_inv.T
-								self.particles[k].landmark[idx_lm].EKF.mu = mean_init
-								self.particles[k].landmark[idx_lm].EKF.Sigma = cov_init
-								self.particles[k].landmark[idx_lm].isobserved = True
-							else:
-								#print("this is the argument to EKF update: ",z_t)
-								if z_t[1] > np.pi*2:
-									raise OSError
-								self.particles[k].landmark[idx_lm].EKF.update(z_t,self.particles[k].pose) 
-								#self.particles[k].landmark[idx_lm].EKF.update(z_t,tmp_pose) 
-								self.particles[k].weight = self.particles[k].weight * self.particles[k].landmark[idx_lm].EKF.p
-							'''
-							current_lm_estimate = self.particles[k].landmark[idx_lm].EKF.mu 
-							idx = np.where(self.gt_lms[:,0] == id_) 
-							gt_loc = self.gt_lms[idx,1:]
-							if len(gt_loc) == 0:
+	def parallel_correction_helper(self,z,k): 
+		if not "None" in str(type(z)):
+			for j in range(len(z)):
+				#original_observation = [z[j]['range'], z[j]['bearing']]
+				z_t = [z[j]['range'], z[j]['bearing']*(np.pi/180)]
+				idx = np.where(self.gt_lms[:,0] == z[j]["clique_id"]) 
+				if not np.isnan(z[j]['bearing']) and not np.isnan(z[j]['range']):
+					id_ = z[j]['clique_id']
+					if id_ in [x.lm_id for x in self.particles[k].landmark]:
+						idx_lm = [i for i,x in enumerate(self.particles[k].landmark) if x.lm_id == id_][0]
+						if not self.particles[k].landmark[idx_lm].isobserved:
+							mean_init = self.h_inv(z_t,self.particles[k].pose)
+							#mean_init = self.h_inv(z_t,tmp_pose)
+							H = self.Hfun(mean_init[0],mean_init[1],self.particles[k].pose,z_t)
+							#H = self.Hfun(mean_init[0],mean_init[1],tmp_pose,z_t)
+							H_inv = np.identity(2) / H 
+							cov_init = H_inv @ self.Qt @ H_inv.T
+							self.particles[k].landmark[idx_lm].EKF.mu = mean_init
+							self.particles[k].landmark[idx_lm].EKF.Sigma = cov_init
+							self.particles[k].landmark[idx_lm].isobserved = True
+						else:
+							#print("this is the argument to EKF update: ",z_t)
+							if z_t[1] > np.pi*2:
 								raise OSError
-							err_ = np.linalg.norm(gt_loc - current_lm_estimate)
-							if err_ > 10 and t > 5: 
-								print("current_estimate: ",current_lm_estimate)
-								print("gt_loc: ",gt_loc)
-								print("err_:",err_)
-								raise OSError 
-							'''
-			else:
-				print("observations is none type....")
-				raise OSError
-			
-			'''
-			if not np.all(original_pose == self.particles[k].pose):
-				print("original_pose: ",original_pose)
-				print("tmp_pose: ",tmp_pose)
-				print("self.particles[k].pose: ",self.particles[k].pose)
-				raise OSError
-			'''
-			
+							self.particles[k].landmark[idx_lm].EKF.update(z_t,self.particles[k].pose) 
+							#self.particles[k].landmark[idx_lm].EKF.update(z_t,tmp_pose) 
+							self.particles[k].weight = self.particles[k].weight * self.particles[k].landmark[idx_lm].EKF.p
+		else:
+			raise OSError 
+		
+	def correction(self,t,z):
+		threads = []
+		for k in range(self.n): 
+			thread_k = threading.Thread(target=self.parallel_correction_helper,args=(z,k))
+			threads.append(thread_k)
+			thread_k.start() 
+		
+		for thread in threads:
+			thread.join()
+
 		#Update weights 
 		weight_sum = np.sum([x.weight for x in self.particles])
 		for k in range(self.n): 

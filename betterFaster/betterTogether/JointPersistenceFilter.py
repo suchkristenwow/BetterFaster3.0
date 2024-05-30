@@ -7,9 +7,9 @@ def logdiff(in1,in2):
 
 def logsum(in1,in2):
     if in1 < in2:
-        temp = in1;
-        in1 = in2;
-        in2 = temp;
+        temp = in1
+        in1 = in2
+        in2 = temp
     out = in1 + np.log1p(-np.exp(in2 - in1))
     if np.isnan(out):
         raise OSError
@@ -37,11 +37,9 @@ class PersistenceFilter:
     self._log_clique_lower_evidence_sum = None
         
     #The natural logarithm of the marginal (evidence) probability p(Y_{1:N})
-    self._log_evidence = np.array([[0.0 for i in range(num_features)] for j in range(num_features)])
+    #self._log_evidence = np.array([[0.0 for i in range(num_features)] for j in range(num_features)])
     self._log_clique_evidence = 0.0
         
-    #A function returning the value of the survival time prior based upon the ELAPSED time since the feature's instantiation
-    #self._shifted_log_survival_function = lambda t, i: self._log_survival_function(t - self._initialization_time[i])
     # TESTING MEMORILESS PRIOR 
     self._shifted_log_survival_function = lambda t, i: self._log_survival_function(t - self._last_observation_time[i])
     
@@ -49,91 +47,76 @@ class PersistenceFilter:
     self._shifted_logdF = lambda t1, t0, i: logdiff(self._shifted_log_survival_function(t0, i), self._shifted_log_survival_function(t1, i)) if t1 - t0 != 0 else 0.0
         
   def update(self, detector_output, observation_time, P_M, P_F):
-    
-    list_of_detected_features = []
-    for i in range(len(self._log_likelihood)):
-        if(detector_output[i] == 1):
-            list_of_detected_features.append(i)
+    detected_indices = np.nonzero(detector_output)[0]  # Indices of detected features
 
-    # do clique filtering
+    # Precompute log(P_F) and log(1 - P_F)
+    log_P_F = np.log(P_F)
+    log_1_minus_P_F = np.log(1 - P_F)
+
+    # Update clique filtering
     if self._log_clique_lower_evidence_sum is not None:
-        self._log_clique_lower_evidence_sum = logsum(self._log_clique_lower_evidence_sum, np.sum([el for el in self._log_likelihood]) + 
-                                                self._shifted_logdF(observation_time, max(self._last_observation_time), np.asarray(self._last_observation_time).argmax())) + np.sum([(log(P_F) if el else log(1 - P_F)) for el in detector_output])
+        self._log_clique_lower_evidence_sum = np.logaddexp(
+            self._log_clique_lower_evidence_sum,
+            np.sum(self._log_likelihood) +
+            self._shifted_logdF(observation_time, np.max(self._last_observation_time), np.argmax(self._last_observation_time))) + \
+                np.sum([log_P_F if el else log_1_minus_P_F for el in detector_output])
     else:
-        self._log_clique_lower_evidence_sum = np.sum([(log(P_F) if el else log(1 - P_F)) for el in detector_output]) + log1p(-exp(self._shifted_log_survival_function(observation_time, 0)))
+        self._log_clique_lower_evidence_sum = np.sum([log_P_F if el else log_1_minus_P_F for el in detector_output]) + \
+            np.log1p(-np.exp(self._shifted_log_survival_function(observation_time, 0)))
         if np.isnan(self._log_clique_lower_evidence_sum):
-            raise OSError 
+            raise OSError
         
-    # do pairwise filtering
+    # Update pairwise filtering
     for i in range(len(self._log_likelihood)):
-        #Update the lower sum LY
         if self._log_lower_evidence_sum[i,i] is not None:
-            #_log_lower_evidence_sum has been previously initialized, so just update it in the usual way
-            self._log_lower_evidence_sum[i,i] = logsum(self._log_lower_evidence_sum[i,i], self._log_likelihood[i] + self._shifted_logdF(observation_time, self._last_observation_time[i], i)) + \
-                             (log(P_F) if detector_output[i] else log(1 - P_F))
+            self._log_lower_evidence_sum[i,i] = np.logaddexp(
+                self._log_lower_evidence_sum[i,i],
+                self._log_likelihood[i] +
+                self._shifted_logdF(observation_time, self._last_observation_time[i], i)) + \
+                (log_P_F if detector_output[i] else log_1_minus_P_F)
         else:
-            #This is the first observation we've incorporated; initialize the logarithm of lower running sum here
-            self._log_lower_evidence_sum[i,i] = (log(P_F) if detector_output[i] else log(1 - P_F)) + log1p(-exp(self._shifted_log_survival_function(observation_time, i)))
-        # update joint distribution
-        
-        for j in range(i):
-            if(j == i):
-                continue
-            if self._log_lower_evidence_sum[i,j] is not None:
-                #print("this has already been initted....")
-                #_log_lower_evidence_sum has been previously initialized, so just update it in the usual way
-                self._log_lower_evidence_sum[i,j] = logsum(self._log_lower_evidence_sum[i,j], self._log_likelihood[i] + self._log_likelihood[j] + self._shifted_logdF(observation_time, max(self._last_observation_time[i], self._last_observation_time[j]), i)) +\
-                    (log(P_F) if detector_output[i] else log(1 - P_F)) + (log(P_F) if detector_output[j] else log(1 - P_F))
-            else:
-                #print("this is the first observation...")
-                #This is the first observation we've incorporated; initialize the logarithm of lower running sum here
-                self._log_lower_evidence_sum[i,j] = (log(P_F) if detector_output[i] else log(1 - P_F)) + (log(P_F) if detector_output[j] else log(1 - P_F)) + log1p(-exp(self._shifted_log_survival_function(observation_time, i)))
-                if np.isnan(self._log_lower_evidence_sum[i,j]): 
-                    raise OSError
-            self._log_lower_evidence_sum[j,i] = self._log_lower_evidence_sum[i,j]
-            
-        #Update the measurement likelihood pY_tN
-        self._log_likelihood[i] = self._log_likelihood[i] + (log(1.0 - P_M) if detector_output[i] else log(P_M))
+            self._log_lower_evidence_sum[i,i] = (log_P_F if detector_output[i] else log_1_minus_P_F) + \
+                np.log1p(-np.exp(self._shifted_log_survival_function(observation_time, i)))
+            if np.isnan(self._log_lower_evidence_sum[i,i]):
+                raise OSError
 
-        #Update the last observation time
-        if i in list_of_detected_features:
+        for j in range(i):
+            if (j==i):
+                continue 
+            if self._log_lower_evidence_sum[i,j] is not None:
+                self._log_lower_evidence_sum[i,j] = np.logaddexp(
+                    self._log_lower_evidence_sum[i,j],
+                    self._log_likelihood[i] + self._log_likelihood[j] +
+                    self._shifted_logdF(observation_time, np.max([self._last_observation_time[i], self._last_observation_time[j]]), i) +
+                    (log_P_F if detector_output[i] else log_1_minus_P_F) +
+                    (log_P_F if detector_output[j] else log_1_minus_P_F))
+            else:
+                self._log_lower_evidence_sum[i,j] = (log_P_F if detector_output[i] else log_1_minus_P_F) + \
+                    (log_P_F if detector_output[j] else log_1_minus_P_F) + \
+                    np.log1p(-np.exp(self._shifted_log_survival_function(observation_time, i)))
+                if np.isnan(self._log_lower_evidence_sum[i,j]):
+                    raise OSError
+                self._log_lower_evidence_sum[j,i] = self._log_lower_evidence_sum[i,j]
+
+        self._log_likelihood[i] += (np.log(1.0 - P_M) if detector_output[i] else np.log(P_M))
+
+        if i in detected_indices:
             self._last_observation_time[i] = observation_time
 
-        #Compute the marginal (evidence) probability pY
-        self._log_evidence[i,i] = logsum(self._log_lower_evidence_sum[i,i], self._log_likelihood[i] + self._shifted_log_survival_function(self._last_observation_time[i], i))
-        for j in range(i):
-            if(j == i):
-                continue
-            #print("updating log evidence...")
-            self._log_evidence[i,j] = logsum(self._log_lower_evidence_sum[i,j], self._log_likelihood[i] + self._log_likelihood[j] + self._shifted_log_survival_function(self._last_observation_time[i], i))
-            self._log_evidence[j,i] = self._log_evidence[i,j]
-            
     self._clique_likelihood = np.sum(self._log_likelihood)
- 
-    self._log_clique_evidence = logsum(self._log_clique_lower_evidence_sum, np.sum(self._log_likelihood) + self._shifted_log_survival_function(self._last_observation_time[np.asarray(self._last_observation_time).argmax()], np.asarray(self._last_observation_time).argmax()))
+
+    log_survival_term = self._shifted_log_survival_function(np.max(self._last_observation_time), np.argmax(self._last_observation_time))
+    self._log_clique_evidence = np.logaddexp(self._log_clique_lower_evidence_sum, np.sum(self._log_likelihood) + log_survival_term)
+
     if np.isnan(self._log_clique_evidence):
-        print("this is log clique evidence: ",self._log_clique_evidence)
         raise OSError
 
-  def predict(self, prediction_time, feature_id, feature_id2=None):
-    """Compute the posterior persistence probability p(X_t = 1 | Y_{1:N}).
-
-    Args:
-      prediction_time:  A floating-point value in the range
-        [last_observation_time, infty) indicating the time t
-        for which to compute the posterior survival belief p(X_t = 1 | Y_{1:N})
-
-    Returns:
-      A floating-point value in the range [0, 1] giving the
-      posterior persistence probability p(X_t = 1 | Y_{1:N}).
-    """
-    if feature_id2 is None:
-        return exp(self._log_likelihood[feature_id] - self._log_evidence[feature_id,feature_id] + self._shifted_log_survival_function(prediction_time, feature_id))
-    else:
-        return exp(self._log_likelihood[feature_id] + self._log_likelihood[feature_id2] - self._log_evidence[feature_id,feature_id2] + self._shifted_log_survival_function(prediction_time, feature_id))
-    
   def predict_clique_likelihood(self, prediction_time):
-        return np.exp(self._clique_likelihood - self._log_clique_evidence + self._shifted_log_survival_function(prediction_time, np.asarray(self._last_observation_time).argmax()))
+        #print("self._clique_likelihood: ",self._clique_likelihood)
+        #print("self._log_clique_evidence: ",self._log_clique_evidence)
+        survival_function_term = self._shifted_log_survival_function(prediction_time, np.asarray(self._last_observation_time).argmax())
+        #print("survival_function_term: ",survival_function_term)
+        return np.exp(self._clique_likelihood - self._log_clique_evidence + survival_function_term)  
 
   @property
   def log_survival_function(self):
@@ -150,4 +133,3 @@ class PersistenceFilter:
   @property
   def initialization_time(self):
     return self._initialization_time
-  

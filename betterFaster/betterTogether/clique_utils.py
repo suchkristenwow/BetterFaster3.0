@@ -134,14 +134,14 @@ def get_tracked_cliques(exp,parameters,data_association,all_clique_feats):
     return tracked_cliques
 
 def cone_gstate_function(tsteps_in_current_state): 
-    print("entered cone gstate estimate function ... this is tsteps in current state: ",tsteps_in_current_state)
+    #print("entered cone gstate estimate function ... this is tsteps in current state: ",tsteps_in_current_state)
     if tsteps_in_current_state <= 3:
         return 1 
     else:
         return 0 
     
 def tree_gstate_function(x): 
-    print("this is tree_gstate_function ... experiment: ",x)
+    #print("this is tree_gstate_function ... experiment: ",x)
     if x <= 3:
         return 1
     elif 3 < x and x <= 6:

@@ -5,8 +5,8 @@ experiments = 10
 sim_length = 500 
 
 [betterTogether]
-P_Miss_detection = 0.1 
-P_False_detection = 0.05 
+P_Miss_detection = 0.1
+P_False_detection = 0.025 
 lambda_u = 0.003 
 detection_threshold = 0.9 
 rejection_threshold = 0.5 
@@ -22,7 +22,7 @@ T_nu_cone = 9
 T_nu_tree = 3
 growth_state_relevancy_level = 0.75 
 n_gstates = 3 
-hamming_distance_similarity = 0.9
+hamming_distance_similarity = 10
 
 [slam]
 n_particles = 25

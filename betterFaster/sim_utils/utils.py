@@ -34,12 +34,11 @@ def get_data_association(n_experiments,results_dir):
     return data_association
 
 def get_reinitted_id(all_data_associations,n,id_,optional_exp=None): 
-    print("getting reinitted_id!")
-
+    #print("getting reinitted_id!")
     if n == 1:
-        print("n is one... returning this id: ",id_)
+        #print("n is one... returning this id: ",id_)
         if optional_exp is not None:
-            print("in here!")
+            #print("in here!")
             lms_i = all_data_associations[n]
             matching_data_associations = all_data_associations[min(all_data_associations.keys())]
             if id_ in matching_data_associations[:,0]:
@@ -54,14 +53,10 @@ def get_reinitted_id(all_data_associations,n,id_,optional_exp=None):
                         idx = np.where(matching_data_associations[:,0] == id_)
                         lm_id_pos = np.reshape(matching_data_associations[idx,1:],(2,1))
                         break 
-            print("lms_i: ",lms_i)
-            print("lm_id_pos: ",lm_id_pos)
-            print("calling complicated function...")
-            print("len(lm_id_pos):",len(lm_id_pos))
             row_idx = complicated_function(lms_i,lm_id_pos)
             #print("row_idx:",row_idx)
             if row_idx is None or lms_i[row_idx,0] == id_:
-                print("made this condition...")
+                #print("made this condition...")
                 lms_i = all_data_associations[n+1]
                 if len(lm_id_pos) == 0:
                     raise OSError 
@@ -75,17 +70,11 @@ def get_reinitted_id(all_data_associations,n,id_,optional_exp=None):
     if all_data_associations is None: 
         print("all_data_associations is NONE")
         raise OSError 
-        all_data_associations = {}
-        for exp in range(n):
-            data_association_filepath = "/home/kristen/BetterFaster3.0/sim_utils/data_association/exp"+str(exp)+"_data_association.csv"
-            all_data_associations[exp+1] = np.genfromtxt(data_association_filepath)
-
-    #print("all_data_associaitons: ",all_data_associations)
 
     #want to see if this landmark existed in experiments before this    
     if id_ in all_data_associations[min(all_data_associations.keys())][:,0]:
         if optional_exp is not None:
-            print("in here!")
+            #print("in here!")
             matching_data_associations = all_data_associations[min(all_data_associations.keys())]
             idx = np.where(matching_data_associations[:,0] == id_)
             lm_id_pos = matching_data_associations[idx,1:]
@@ -93,10 +82,10 @@ def get_reinitted_id(all_data_associations,n,id_,optional_exp=None):
             if len(lm_id_pos) == 0:
                 raise OSError
             row_idx = complicated_function(lms_i,lm_id_pos)
-            print("this is row_idx:",row_idx)
+            #print("this is row_idx:",row_idx)
             if row_idx is None:
                 lms_i = all_data_associations[n+1]
-                print("this is lms_i:",lms_i)
+                #print("this is lms_i:",lms_i)
                 if len(lm_id_pos) == 0:
                     raise OSError
                 row_idx = complicated_function(lms_i,lm_id_pos)
@@ -115,44 +104,21 @@ def get_reinitted_id(all_data_associations,n,id_,optional_exp=None):
     i = n - 1
     c = 0 
     while 1 <= i:
-        #print("i:",i)
         lms_i = all_data_associations[i] 
-        #print("lms_i ",lms_i)
-        #print("lm_id_pos: ",lm_id_pos)
         if len(lm_id_pos) == 0:
             raise OSError
         row_idx = complicated_function(lms_i,lm_id_pos)
         if not row_idx is None:
             reinitted_id = lms_i[row_idx,0] 
-        #print("reinitted_id: ",reinitted_id)
-        '''
-        else:
-            if not reinitted_id is None: 
-                #return reinitted_id
-            reinitted_id = None 
-        '''
         i -= 1
-        '''
-        print("row_idx: ",row_idx)
-        if row_idx.size > 0:
-            #this lm existed in the previous experiment 
-            reinitted_id = lms_i[row_idx,0]
-        else:
-            #this lm did not exist in this experiment
-            break
-        except: 
-            print("this landmark is not in the data associations....")
-            return None 
-        '''
+
     return int(reinitted_id )
 
 def complicated_function(lms_i,lm_id_pos):
-    print("lms_i: ",lms_i)
-    print("lm_id_pos.shape: ",lm_id_pos.shape)
     if len(lm_id_pos.shape) > 2:
-        print("lm_id_pos.shape: ",lm_id_pos.shape)
+        #print("lm_id_pos.shape: ",lm_id_pos.shape)
         lm_id_pos = lm_id_pos[0,0]
-    print("lm_id_pos: ",lm_id_pos)
+    #print("lm_id_pos: ",lm_id_pos)
     i0 = [i for i,x in enumerate(lms_i[:,1]) if x == lm_id_pos[0]]
     i1 = [i for i,x in enumerate(lms_i[:,2]) if x == lm_id_pos[1]]
     idx = [x for x in i0 if x in i1] 
@@ -162,6 +128,51 @@ def complicated_function(lms_i,lm_id_pos):
         return idx[0] 
     else:
         return None 
+
+'''
+def get_reinitted_id(all_data_associations, n, id_, optional_exp=None):
+    #this is the chat gpt version
+    if n == 1:
+        if optional_exp is not None:
+            for exp_data in all_data_associations.values():
+                if id_ in exp_data[:, 0]:
+                    idx = np.where(exp_data[:, 0] == id_)
+                    lm_id_pos = exp_data[idx, 1:]
+                    if len(lm_id_pos) == 0:
+                        raise OSError
+                    row_idx = complicated_function(exp_data, lm_id_pos)
+                    if row_idx is not None:
+                        return exp_data[row_idx, 0]
+            return None
+        else:
+            return id_
+
+    if id_ not in all_data_associations[min(all_data_associations.keys())][:, 0]:
+        return None
+
+    for i in range(n - 1, 0, -1):
+        if id_ in all_data_associations[i][:, 0]:
+            exp_data = all_data_associations[i]
+            idx = np.where(exp_data[:, 0] == id_)
+            lm_id_pos = exp_data[idx, 1:]
+            if len(lm_id_pos) == 0:
+                raise OSError
+            row_idx = complicated_function(exp_data, lm_id_pos)
+            if row_idx is not None:
+                return exp_data[row_idx, 0]
+    return None
+
+def complicated_function(lms_i, lm_id_pos):
+    #this is the chat gpt version
+    if len(lm_id_pos.shape) > 2:
+        lm_id_pos = lm_id_pos[0, 0]
+    i0 = np.where(lms_i[:, 1] == lm_id_pos[0])[0]
+    i1 = np.where(lms_i[:, 2] == lm_id_pos[1])[0]
+    idx = np.intersect1d(i0, i1)
+    return idx[0] if len(idx) == 1 else None
+
+'''
+
 
 def extract_t_from_filename(filename): 
     match = re.search(r'_(\d+)_', filename)
@@ -420,10 +431,10 @@ class simUtils():
         test_1 = y0 + range_*np.sin(np.deg2rad(yaw))
 
         if int(np.round(x1,1) - np.round(test_0,1)) > 0:
-            print("np.round(test_0,1):{}, np.round(x1,1):{}".format(np.round(test_0,1),np.round(x1,1)))
+            #print("np.round(test_0,1):{}, np.round(x1,1):{}".format(np.round(test_0,1),np.round(x1,1)))
             delta_x = np.round(x1,1) - np.round(test_0,1) 
-            print("delta_x: ",delta_x)
-            print("test_0:{},test_1: {}".format(test_0,test_1))
+            #print("delta_x: ",delta_x)
+            #print("test_0:{},test_1: {}".format(test_0,test_1))
             fig,ax = plt.subplots()
             ax.scatter(x0,y0,color="k")
             pointer_x = x0 + 2*np.cos(np.deg2rad(p0[5]))
@@ -436,10 +447,10 @@ class simUtils():
             raise OSError 
 
         if int(np.round(y1,1) - np.round(test_1,1)) > 0: 
-            print("np.round(test_0,1):{}, np.round(x1,1):{}".format(np.round(test_0,1),np.round(x1,1)))
+            #print("np.round(test_0,1):{}, np.round(x1,1):{}".format(np.round(test_0,1),np.round(x1,1)))
             delta_y = np.round(test_0,1) - np.round(x1,1)
-            print("delta_y: ",delta_y)
-            print("test_0:{},test_1: {}".format(test_0,test_1))
+            #print("delta_y: ",delta_y)
+            #print("test_0:{},test_1: {}".format(test_0,test_1))
             fig,ax = plt.subplots()
             ax.scatter(x0,y0,color="k")
             pointer_x = x0 + 2*np.cos(np.deg2rad(p0[5]))
@@ -643,17 +654,17 @@ class simUtils():
     def check_observation_w_gt(self,camera_pose_t,depth,feat_loc):
         gt_sixd_cam_pose  = self.convert_cam_pose(camera_pose_t)
         gt_sixd_cam_pose[5] = np.deg2rad(gt_sixd_cam_pose[5])
-        print("gt_sixd_cam_pose:",gt_sixd_cam_pose)
+        #print("gt_sixd_cam_pose:",gt_sixd_cam_pose)
         gt_world_pt = self.get_world_pt(camera_pose_t,depth,feat_loc)
-        print("gt_world_pt:",gt_world_pt) 
+        #print("gt_world_pt:",gt_world_pt) 
         gt_verts = self.get_frustrum_verts(gt_sixd_cam_pose)
         if not point_in_trapezoid(gt_world_pt,gt_verts):
-            print("this would not even be observable even if the pose estimate was better....")
+            #print("this would not even be observable even if the pose estimate was better....")
             #this would not even be observable even if the pose estimate was better....
             #extract all observations is messed up 
             return False 
         else:
-            print("the reason this is not observable is because the trajectory estiamte is off")
+            #print("the reason this is not observable is because the trajectory estiamte is off")
             #the reason this is not observable is because the trajectory estimate is off 
             #everything is ok
             return True 
@@ -684,7 +695,7 @@ class simUtils():
             for feat_id in carla_observations_t[lm_id].keys():
                 detx = {}
                 detx["clique_id"] = get_reinitted_id(self.data_association,self.experiment,lm_id) 
-                print("this is lm_id: ",lm_id)
+                #print("this is lm_id: ",lm_id)
                 detx["feature_id"] = feat_id
                 #def get_world_pt(results_dir,experiment,frame,lm_id,width,height,fov,px_coord,camera_pose,depth):
                 #print("carla_observations_t[lm_id][feat_id]:",carla_observations_t[lm_id][feat_id])
@@ -707,11 +718,13 @@ class simUtils():
                             idx = np.where(self.data_association[:,0] == lm_id)
                             if not lm_id in self.data_association[:,0]: 
                                 continue 
+                            '''
                             print("self.data_association[lm_id,:]",self.data_association[idx,:])
                             print("world_pt: ",world_pt)
                             print("sixd_cam_pose: ",sixd_cam_pose)
                             print("feat_loc:",feat_loc)
                             print("depth:",depth)
+                            '''
                             #print("this is range: ",np.linalg.norm(world_pt - sixd_cam_pose[:3]))
                             #plot the car with points
                             fig,ax = plt.subplots()
@@ -745,9 +758,11 @@ class simUtils():
                             print("writing {}".format(filename))
                             plt.savefig(filename)
                             plt.close()
+                    '''
                     else:
                         print("this vert is not observable because its {}m away but the max range is {}".format(np.linalg.norm(world_pt - sixd_cam_pose[:3]),self.max_range))
                         continue 
+                    '''
                 
                 #bearing, range_ = self.get_range_bearing(sixd_cam_pose,world_pt,car_pose,enable_noise_variance) #this bearing is in degrees
                 bearing, range_ = self.get_range_bearing(car_pose,world_pt)

@@ -5,7 +5,7 @@ build-backend = "flit_core.buildapi"
 [project]
 name = "betterFaster"
 version = "0.1.0"
-description = "A project for tree of thought robot guided exploration"
+description = "It's better AND faster"
 authors = [
     { name = "Kristen Such", email = "kristen.such@colorado.edu" }
 ]

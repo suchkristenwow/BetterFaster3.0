@@ -6,54 +6,51 @@ import toml
 from .utils import get_data_association, get_sim_length, get_reinitted_id
 import matplotlib.pyplot as plt 
 
-def write_results(experiment_no,exp_parameters,performance_tracker):
-    results_dir = exp_parameters["results_dir"]
+def write_results(experiment_no,exp_parameters,performance_tracker,out_dir):
+    #results_dir = exp_parameters["results_dir"]
     sim_length = exp_parameters["sim_length"]
-
-    if not os.path.exists(os.path.join(results_dir,"postProcessingResults")):
-        os.mkdir(os.path.join(results_dir,"postProcessingResults"))
-
-    postProcessingResults_dir = os.path.join(results_dir,"postProcessingResults")
+    print("this is out_dir: ",out_dir)
 
     #save posterior estimate 
-    if not os.path.exists(os.path.join(results_dir,"postProcessingResults/posteriors")):
-        os.mkdir(os.path.join(results_dir,"postProcessingResults/posteriors"))
+    if not os.path.exists(os.path.join(out_dir,"posteriors")):
+        os.mkdir(os.path.join(out_dir,"posteriors"))
     
-    posterior_dir = os.path.join(results_dir,"postProcessingResults/posteriors") 
+    posterior_dir = os.path.join(out_dir,"posteriors") 
+    print("this is posterior_dir: ",posterior_dir)
     print("writing {}".format(os.path.join(posterior_dir,"exp"+str(experiment_no)+".pickle")))
     with open(os.path.join(posterior_dir,"exp"+str(experiment_no)+".pickle"),"wb") as handle:
         pickle.dump(performance_tracker.posteriors,handle)
 
     #save best trajectory estimate 
-    if not os.path.exists(os.path.join(results_dir,"postProcessingResults/trajectories")):
-        os.mkdir(os.path.join(results_dir,"postProcessingResults/trajectories"))
+    if not os.path.exists(os.path.join(out_dir,"trajectories")):
+        os.mkdir(os.path.join(out_dir,"trajectories"))
 
-    traj_dir = os.path.join(postProcessingResults_dir,"trajectories")
+    traj_dir = os.path.join(out_dir,"trajectories")
     print("writing {}".format(os.path.join(traj_dir,"exp"+str(experiment_no)+".csv")))
     np.savetxt(os.path.join(traj_dir,"exp"+str(experiment_no)+".csv"),performance_tracker.best_traj_estimate)
 
     #save best landmark localization estimates
-    if not os.path.exists(os.path.join(results_dir,"postProcessingResults/lm_estimates")):
-        os.mkdir(os.path.join(results_dir,"postProcessingResults/lm_estimates"))
+    if not os.path.exists(os.path.join(out_dir,"lm_estimates")):
+        os.mkdir(os.path.join(out_dir,"lm_estimates"))
 
-    lm_dir = os.path.join(postProcessingResults_dir,"lm_estimates")
+    lm_dir = os.path.join(out_dir,"lm_estimates")
     print("writing {}".format(os.path.join(lm_dir,"exp"+str(experiment_no)+".pickle")))
     with open(os.path.join(lm_dir,"exp"+str(experiment_no)+".pickle"),"wb") as handle:
         pickle.dump(performance_tracker.best_landmark_estimates,handle)
 
     #save accuracy estimation 
-    if not os.path.exists(os.path.join(results_dir,"postProcessingResults/accuracy")):
-        os.mkdir(os.path.join(results_dir,"postProcessingResults/accuracy"))
+    if not os.path.exists(os.path.join(out_dir,"accuracy")):
+        os.mkdir(os.path.join(os.path.join(out_dir,"accuracy"))) 
 
-    accuracy_dir = os.path.join(postProcessingResults_dir,"accuracy")
+    accuracy_dir = os.path.join(os.path.join(out_dir,"accuracy"))
     print("writing {}".format(os.path.join(accuracy_dir,"exp"+str(experiment_no)+".pickle")))
     with open(os.path.join(accuracy_dir,"exp"+str(experiment_no)+".pickle"),"wb") as handle:
         pickle.dump(performance_tracker.accuracy,handle) 
 
     #make slam error plots 
-    save_slam_error_plots(results_dir,experiment_no,sim_length,performance_tracker)
+    save_slam_error_plots(experiment_no,sim_length,performance_tracker,out_dir)
 
-def save_slam_error_plots(results_dir,experiment_no,sim_length,performance_tracker): 
+def save_slam_error_plots(experiment_no,sim_length,performance_tracker,out_dir): 
     fig, axs = plt.subplots(2, 1, figsize=(8, 6))  # 2 Rows, 1 Column 
     fig.subplots_adjust(left=0.2, right=0.95, top=0.95, bottom=0.05)
     #trajectory error 
@@ -79,9 +76,9 @@ def save_slam_error_plots(results_dir,experiment_no,sim_length,performance_track
     axs[1].grid(True)
     #plt.tight_layout() 
     filename = "experiment"+str(experiment_no)+"_slam_err_plt.jpg" 
-    if not os.path.exists(os.path.join(results_dir,"slam_err_plots")): 
-        os.mkdir(os.path.join(results_dir,"slam_err_plots"))
-    plt.savefig(os.path.join(results_dir,"slam_err_plots/" + filename))
+    if not os.path.exists(os.path.join(out_dir,"slam_err_plots")): 
+        os.mkdir(os.path.join(out_dir,"slam_err_plots"))
+    plt.savefig(os.path.join(out_dir,"slam_err_plots/" + filename))
     #plt.show(block=True)
     plt.close() 
 
@@ -158,7 +155,8 @@ class PerformanceTracker:
                 data_associations = np.genfromtxt(data_associations_path)
                 if np.isnan(data_associations[:,0].any()):
                     data_associations = np.genfromtxt(data_associations_path,delimiter=" ")
-                    #print("this is data_associations: ",data_associations)
+                    print("this is data_associations: ",data_associations)
+                    raise OSError 
             else:
                 if data_associations is None:
                     raise OSError
@@ -166,17 +164,17 @@ class PerformanceTracker:
                 raise OSError
             else:
                 self.all_data_associations[n] = data_associations
-                #print("assigning data_associations to self.all_data_associations... this is n:",n)
+                print("assigning data_associations to self.all_data_associations... this is n:",n)
             #sanity check
             #print("checking the data associations....")
             for x in self.all_data_associations.keys():
-                #print("checking what we've set... this is n:",x)
                 tmp = self.all_data_associations[x] 
                 #print("tmp:",tmp)
                 if np.isnan(tmp).any():
                     raise OSError
             exp_clique_ids = data_associations[:,0]
-            #print("exp_clique_ids: ",exp_clique_ids)
+            '''
+            print("exp_clique_ids: ",exp_clique_ids)
             if n > 1 and self.results_dir is not None:
                 for i,id_ in enumerate(exp_clique_ids):
                     #get_reinitted_id(all_data_associations,n,id_)
@@ -184,8 +182,9 @@ class PerformanceTracker:
                     #print("this is orig_id: ",orig_id)
                     if not orig_id is None:
                         exp_clique_ids[i] = orig_id
+            '''
             self.gt_clique_persistence[n] = exp_clique_ids
-            #print("this is all_data_associations: ",self.all_data_associations[n]) 
+    
         with open(os.path.join(self.results_dir,"gt_gstates.pickle"),"rb") as handle:
             self.gt_gstates = pickle.load(handle)
         self.acceptance_threshold = None 
@@ -220,6 +219,8 @@ class PerformanceTracker:
         self.trajectory_estimate_error[:,0] = np.arange(n_experiments*sim_length)
         self.landmark_estimate_error_cache = np.zeros((n_experiments*sim_length,2))
         self.landmark_estimate_error_cache[:,0] = np.arange(n_experiments*sim_length)
+        self.ind_landmark_estimate_error_cache = {} 
+
         #Growth state errors 
         self.gstate_estimate_error_cache = {} 
         self.gstate_err_rate = np.zeros((n_experiments*self.sim_length,))
@@ -229,14 +230,31 @@ class PerformanceTracker:
         #self.best_landmark_estimates[id_]["mu"] = best_landmark_estimates[idx].EKF.mu 
         #self.data_association[exp + 1]  = exp_data_association  
         lm_mses = []
-        
+
         for id_ in self.best_landmark_estimates.keys(): 
             lm_mu = self.best_landmark_estimates[id_]["mu"]
-            idx = np.where(self.data_association[self.current_exp + 1][:,0] == id_)
+
+            for i in self.data_association.keys(): 
+                data_association = self.data_association[i]
+                if id_ in data_association[:,0]: 
+                    idx = np.where(data_association[:,0] == id_)
+                    break 
+
             if not np.all(lm_mu == 0):
-                gt_lm_loc = self.data_association[self.current_exp + 1][idx,1:]
+                gt_lm_loc = data_association[idx,1:]
+                if len(gt_lm_loc) == 0 or gt_lm_loc.size == 0:
+                    print("idx: ",idx) 
+                    print("gt_lm_loc: ",gt_lm_loc)
+                    raise OSError 
                 lm_err = np.linalg.norm(gt_lm_loc - lm_mu)
                 lm_mses.append(lm_err) 
+                if not id_ in self.ind_landmark_estimate_error_cache:
+                    reinit_id = get_reinitted_id(self.all_data_associations,self.current_exp,id_)
+                    if reinit_id in self.ind_landmark_estimate_error_cache:
+                        id_ = reinit_id 
+                    else:
+                        self.ind_landmark_estimate_error_cache[id_] = np.zeros((self.sim_length*self.n_experiments,))
+                self.ind_landmark_estimate_error_cache[id_][global_t] = lm_err 
 
         if np.isnan(np.mean(lm_mses)) or np.isinf(np.mean(lm_mses)): 
             if len(lm_mses) == 0:
@@ -247,6 +265,17 @@ class PerformanceTracker:
                 raise OSError 
         else:
             self.landmark_estimate_error_cache[global_t,1] = np.mean(lm_mses)
+
+        if not isinstance(np.mean(lm_mses),float): 
+            print("lm_mses: ",lm_mses)
+            raise OSError
+        
+        if np.mean(lm_mses) == 0 and len(lm_mses) > 0:
+            print("lm_mses: ",lm_mses)
+            raise OSError 
+        
+        if np.mod(t,10) == 0:
+            print("Mean Landmark Estimation Err: ",np.mean(lm_mses))
 
     def compute_trajectory_mse(self,t):
         global_t = self.current_exp*self.sim_length + t
@@ -330,6 +359,12 @@ class PerformanceTracker:
                     else:
                         #false positive
                         self.accuracy["false_positive"] += 1 
+                if (self.accuracy["true_positive"] + self.accuracy["false_negative"]) != 0 and (self.accuracy["true_negative"] + self.accuracy["false_positive"]) != 0: 
+                    sensitivity = self.accuracy["true_positive"] / (self.accuracy["true_positive"] + self.accuracy["false_negative"])
+                    specificity = self.accuracy["true_negative"] / (self.accuracy["true_negative"] + self.accuracy["false_positive"])
+                    balanced_accuracy = (sensitivity + specificity)/2
+                    if np.mod(t,10) == 0:
+                        print("Balanced Accuracy (posterior performance):",balanced_accuracy)
             else: 
                 if not type_ in self.comparison_accuracies.keys(): 
                     self.comparison_accuracies[type_] = {} 
@@ -459,30 +494,22 @@ class PerformanceTracker:
         global_t = self.current_exp*self.sim_length + t 
         err_t = 0
         for c in clique.growth_state_estimates.keys():  
-            print("this is c: ",c)
+            #print("this is c: ",c)
             gt_gstate_c = None 
             idx = np.where(exp_gstates[:,0] == c) 
-            print("this is idx: ",idx)
+            #print("this is idx: ",idx)
             if c not in exp_gstates[:,0]:
                 reinit_id = get_reinitted_id(self.all_data_associations,self.current_exp,c) 
-                print("this is reinit_id: ",reinit_id)
+                #print("this is reinit_id: ",reinit_id)
                 if reinit_id not in exp_gstates[:,0]:
                     gt_gstate_c = 0 
                 else:
                     idx = np.where(exp_gstates[:,0] == reinit_id)
 
-            print("exp_gstates: ",exp_gstates)
-            print("idx: ",idx)
-            print("exp_gstates[idx,1]: ",exp_gstates[idx,1])
-            print("type of exp_gstates[idx,1]: ",type(exp_gstates[idx,1]))
-            print("shape: ",exp_gstates[idx,1].shape)
-            print("np.squeeze(exp_gstates[idx,1]): ",np.squeeze(exp_gstates[idx,1]))
             if not gt_gstate_c == 0:
                 gt_gstate_c = int(np.squeeze(exp_gstates[idx,1]))
 
-            estimated_gstate_c = clique.growth_state_estimates[c][global_t] 
-            print("estimated_gstate_c: ",estimated_gstate_c)
-            print("gt_gstate_c: ",gt_gstate_c)
+            estimated_gstate_c = clique.growth_state_estimates[c][global_t]
 
             if estimated_gstate_c != gt_gstate_c: 
                 err_t += 1 
@@ -493,6 +520,8 @@ class PerformanceTracker:
         err_rate_t = err_t/len(clique.growth_state_estimates.keys())
 
         self.gstate_err_rate[global_t] = err_rate_t 
+        if np.mod(t,10) == 0:
+            print("Gstate Estimation Err Rate: ",err_rate_t)
 
     def update(self,t,clique,slam,processing_time,type_=None):
         '''
@@ -521,12 +550,9 @@ class PerformanceTracker:
                 print("About {} hours remaining...".format(np.round(total_hours_remaining,3))) 
             else:
                 print("About {} minutes remaining...".format(np.round(total_min_remaining,1)))
-        #exp,t,clique
-        #self.update_clique_posteriors(t,clique,type_)
+
         self.update_clique_posteriors(t,clique)
         self.slam_update(t,slam,type_)
-
         self.compute_landmark_estimate_mse(t) 
         self.compute_trajectory_mse(t)
-
         self.compute_gstate_estimation_error(t,clique)

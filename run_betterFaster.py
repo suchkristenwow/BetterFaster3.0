@@ -53,8 +53,8 @@ class RunBetterFaster:
         if exp == 0 or self.performance_tracker.clique_inst is None: 
             print("this is exp: {}... initting clique simulator!".format(exp))
             clique_sim = clique_simulator(self.parameters,all_clique_features=all_clique_feats,current_exp=exp,sim_length=sim_length,
-                                          data_association=performance_tracker.all_data_associations[exp + 1],exp_observations=exp_observations)
-            slam = fastSLAM2(self.parameters["slam"]["n_particles"],localization_covariance,observed_clique_ids,performance_tracker.all_data_associations[exp + 1])
+                                          data_association=performance_tracker.all_data_associations,exp_observations=exp_observations)
+            slam = fastSLAM2(self.parameters["slam"]["n_particles"],gt_car_traj[0,:],localization_covariance,observed_clique_ids,performance_tracker.all_data_associations[exp + 1])
         else:   
             #need to preserve the clique instance so the posteriors don't drop between experiments 
             clique_sim = self.performance_tracker.clique_inst 
@@ -68,22 +68,35 @@ class RunBetterFaster:
                     betterTogether_sims[data_association_rate].reinit_experiment(exp,exp_observations)
                     untuned_slams[data_association_rate] = self.performance_tracker.comparison_slam_instance["untuned"+str(data_association_rate)]
 
-        plotter = betterFaster_plot(exp,self.parameters,gt_car_traj,observed_clique_ids,performance_tracker.gt_gstates[exp])
-        
+        if exp == 0:
+            plotter = betterFaster_plot(self.parameters["experiments"],exp,self.parameters,gt_car_traj,observed_clique_ids,performance_tracker.gt_gstates[exp],
+                            frame_dir=self.args.frame_dir,show_plots=self.args.showPlots,verbose=self.args.verbose)
+        else: 
+            plotter = betterFaster_plot(self.parameters["experiments"],exp,self.parameters,gt_car_traj,observed_clique_ids,performance_tracker.gt_gstates[exp],
+                            prev_lm_est_err=performance_tracker.ind_landmark_estimate_error_cache,frame_dir=self.args.frame_dir,show_plots=self.args.showPlots,verbose=self.args.verbose)
+            
         self.performance_tracker.init_new_experiment(exp,clique_sim,slam,gt_car_traj,self.parameters)
 
         if self.parameters["comparison_bools"]["compare_betterTogether"]: 
             self.performance_tracker.init_new_comparisons(self.parameters)
 
         processing_time = None 
+        #TIMING STUFF TRYNA GO FAST 
+        slam_times = []
+        clique_times = []
+        perf_times = []
+        plotting_times = []
+        #TIMING STUFF TRYNA GO FAST 
         #3. Iterate through the timesteps 
         for t in range(sim_length): 
-            print("this is t:",t)
+            print("this is experiment {} of {}, t: {} of {}".format(exp,self.parameters["experiments"],t,sim_length)) 
             if t < self.args.start_tstep and exp == self.args.start_experiment:
                 print("we are skipping this timestep:{} as per the commandline arguments...".format(t))
                 continue 
 
             t0 = time.time() 
+
+            slam_time0 = time.time()
             #3a. Estimate Pose 
             if self.parameters["isCarla"]: 
                 estimated_pose = slam.prediction([gt_car_traj[t,0],gt_car_traj[t,1],gt_car_traj[t,5]]) #x,y,yaw
@@ -91,28 +104,50 @@ class RunBetterFaster:
                 #3b. (optional) parse observations 
                 observations_t = sim_utils.reform_observations(t,np.array([gt_car_traj[t,0],gt_car_traj[t,1],gt_car_traj[t,5]]),carla_observations_t) 
             else:
-                print("this is the prediction step...")
-                print("gt_car_pose_t: ",gt_car_traj[t,:])
                 estimated_pose = slam.prediction([gt_car_traj[t,0],gt_car_traj[t,1],gt_car_traj[t,2]]) #x,y,yaw
-                print("estimated_pose: ",estimated_pose)
+                #print("estimated_pose: ",estimated_pose)
+                #traj_err = np.linalg.norm(estimated_pose[:2] - gt_car_traj[t,:2])
                 observations_t = exp_observations[t] 
-                #print("these are the observations at this timestep: ",observations_t)
-                print("... end prediction step...")
-            
+            slam_time1 = time.time() 
+
+            clique_time0 = time.time()
             #3c. update clique sim to find persistent landmarks 
             persistent_observations = clique_sim.update(t,observations_t)
+            clique_time1 = time.time() 
+            clique_times.append(clique_time1 - clique_time0)
+
+            slam_time2 = time.time() 
             #3d. SLAM correction
             slam.correction(t,persistent_observations)
+            slam_time3 = time.time() 
+
+            slam_times.append((slam_time1-slam_time0) + (slam_time3 - slam_time2))
+
+            perf_time0 = time.time() 
             #3e. update performance tracker 
             performance_tracker.update(t,clique_sim,slam,processing_time)
+            perf_time1 = time.time() 
+            perf_times.append(perf_time1 - perf_time0)
+
             processing_time = time.time() - t0 
             #3f. plot 
+            plot_time0 = time.time() 
             plotter.plot_state(slam,t,estimated_pose,observations_t,clique_sim.posteriors,clique_sim.growth_state_estimates)
-            
+            plot_time1 = time.time() 
+            plotting_times.append(plot_time1 - plot_time0)
+
+            if t > 10 and np.mod(t,10) == 0:
+                print("Mean SLAM time: {}, Median SLAM time: {}".format(np.mean(slam_times),np.median(slam_times))) 
+                print("Mean CLIQUE time: {}, Median CLIQUE time: {}".format(np.mean(clique_times),np.median(clique_times)))
+                print("Mean Performance time: {}, Median Performance time: {}".format(np.mean(perf_times),np.median(perf_times)))
+                print("Mean Plotting time: {}, Median Plotting time: {}".format(np.mean(plotting_times),np.median(plotting_times)))
+
         #4. Write results 
         if not self.args.skip_writing_results: 
+            print("self.args.postProcessing_dirName: ",self.args.postProcessing_dirName)
+            print("self.args: ",self.args)
             #experiment_no,results_dir,performance_tracker
-            write_results(exp,self.parameters,performance_tracker)
+            write_results(exp,self.parameters,performance_tracker,self.args.postProcessing_dirName)
 
 if __name__ == "__main__": 
     #/media/kristen/easystore/BetterFaster/kitti_carla_simulator/exp_results
@@ -152,7 +187,39 @@ if __name__ == "__main__":
         type=bool,
         help="Write results? (set True if you dont care about saving the results)",
     ) 
+
+    parser.add_argument(
+        "--frame_dir",
+        default=None,
+        type=str,
+        help="This is where you want to save all the frames of all the plots to make animations later",
+    ) 
+
+    parser.add_argument(
+        "--postProcessing_dirName",
+        type=str,
+        help="This is where all the results will be saved",
+        required=True 
+    ) 
+
+    parser.add_argument(
+        "--showPlots",
+        type=bool,
+        default=False,
+        help="If you want to watch the plots in real time. This will slow everything down, just syk"
+    ) 
+
+    parser.add_argument(
+        "--verbose",
+        type=bool,
+        default=False,
+        help="Debugging Mode will spam"
+    ) 
+
     args = parser.parse_args() 
+    if not os.path.exists(args.postProcessing_dirName): 
+        print("creating: {}".format(args.postProcessing_dirName))
+        os.mkdir(args.postProcessing_dirName)
 
     with open(args.config,"r") as f:
         parameters = toml.load(f)
