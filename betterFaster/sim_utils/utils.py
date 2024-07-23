@@ -5,173 +5,202 @@ import cv2
 import matplotlib.pyplot as plt 
 from scipy.spatial.transform import Rotation 
 import re 
+import pickle 
+import sys 
+sys.path.append("/home/kristen/BetterFaster3.1/betterFaster/SLAMCore")
+from fastSLAM2 import fast_slam_landmark 
+from scipy.spatial.transform import Rotation  
+from sklearn.linear_model import RANSACRegressor
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.pipeline import make_pipeline 
+
+
+def get_tstep_from_intresult_path(int_result_file):
+    #print("int_result_file: ",int_result_file)
+    if "slam_results" in int_result_file:
+        i0 = int_result_file.index("slam_results")
+        tstep = int_result_file[i0+12:-7]
+        #print("tstep: ",tstep)
+    elif "clique_states" in int_result_file: 
+        i0 = int_result_file.index("clique_states") 
+        tstep = int_result_file[i0+13:-7] 
+        #print("tstep:",tstep)
+    elif "performance" in int_result_file: 
+        i0 = int_result_file.index("results") 
+        tstep = int_result_file[i0+7:-7]
+        #raise OSError
+    if not tstep.isdigit():
+        raise OSError 
+    else:
+        return int(tstep)
+
+def get_start_time_exp(postProcessing_dir,desired_exp_start,desired_start_tstep,sim_length):
+    if desired_start_tstep is None:
+        desired_global_t*sim_length 
+    else: 
+        desired_global_t = desired_exp_start*sim_length + desired_start_tstep
+
+    last_completed_experiment = None 
+
+    if desired_exp_start == 0:
+        last_completed_experiment = 0 
+
+    #print("desired_exp_start: ",desired_exp_start) 
+    
+    for exp in range(desired_exp_start-1, 0, -1): 
+        #print("this is exp: ",exp)
+
+        int_clique_pickle = False  
+        int_slam_pickle = False 
+        #loading in the last completed experiment
+        if os.path.exists(os.path.join(postProcessing_dir,"int_results/exp"+str(exp)+"_int_clique_states"+str(sim_length-1)+".pickle")): 
+            int_clique_pickle = True 
+        else:
+            continue 
+        if os.path.exists(os.path.join(postProcessing_dir,"int_results/exp"+str(exp)+"_int_slam_results"+str(sim_length-1)+".pickle")): 
+            int_slam_pickle = True 
+        else:
+            continue  
+        #print("int_clique_pickle: ",int_clique_pickle) 
+        #print("int_slam_pickle: ",int_slam_pickle)
+
+        if int_clique_pickle and int_slam_pickle: 
+            last_completed_experiment = exp 
+            break   
+    
+    if last_completed_experiment is None: 
+        if os.path.exists(os.path.join(postProcessing_dir,"int_results/exp"+str(0)+"_int_clique_states"+str(sim_length-1)+".pickle")):  
+            if os.path.exists(os.path.join(postProcessing_dir,"int_results/exp"+str(0)+"_int_slam_results"+str(sim_length-1)+".pickle")):  
+                last_completed_experiment = 0 
+ 
+    print("last_completed_experiment: ",last_completed_experiment)
+    print("desired_exp_start: ",desired_exp_start) 
+
+    if last_completed_experiment <= desired_exp_start - 1: 
+        #print("in the if statement")
+        #then change desired t to sim_length - 1
+        return last_completed_experiment,sim_length-1 
+    else: 
+        if desired_start_tstep is not None: 
+            #print("desired_exp_start: ",desired_exp_start)
+            available_int_results = [x for x in os.listdir(os.path.join(postProcessing_dir,"int_results")) if "exp"+str(desired_exp_start) in x]
+            available_tsteps = [get_tstep_from_intresult_path(x) for x in available_int_results]
+            available_tsteps = [x for x in available_tsteps if x <= desired_start_tstep]
+            #print("max(available_tsteps): ",max(available_tsteps))
+            return desired_exp_start,max(available_tsteps)
+        else: 
+            #print("in here... returning start of last completed experimnent")
+            return last_completed_experiment,0 
+        
+def load_in_previous_results(start_exp,start_t,postProcessing_dir,clique_sim,slam): 
+    #intermediate_pickle_name = "exp"+str(self.current_exp)+"_int_clique_states"+str(t)+".pickle"
+    int_clique_pickle_path = os.path.join(os.path.join(postProcessing_dir,"int_results/exp"+str(start_exp)+"_int_clique_states"+str(start_t)+".pickle"))    
+    with open(os.path.join(int_clique_pickle_path),"rb") as handle: 
+        int_clique_results = pickle.load(handle)
+
+    clique_sim.observation_cache = int_clique_results["observation_cache"]
+    clique_sim.growth_state_estimates = int_clique_results["growth_state_estimates"]
+    clique_sim.cone_feature_description_cache = int_clique_results["cone_feature_description_cache"]
+    clique_sim.tree_feature_description_cache = int_clique_results["tree_feature_description_cache"]
+    clique_sim.posteriors = int_clique_results["posteriors"] 
+    tracked_clique_ids = [x for x in int_clique_results.keys() if not isinstance(x,str)]
+   
+    for i,c in enumerate(tracked_clique_ids): 
+        #print("reinitting clique c:{}  the {} out of {}".format(c,i,len(tracked_clique_ids)))
+        if c not in clique_sim.tracked_cliques.keys():
+            reinitted_id = get_reinitted_id(clique_sim.all_data_associations,start_exp,c)
+            if reinitted_id in clique_sim.tracked_cliques.keys():
+                c = reinitted_id  
+            else: 
+                for i in clique_sim.all_data_associations.keys():
+                    reinitted_id =  get_reinitted_id(clique_sim.all_data_associations,start_exp,c,optional_exp=i)
+                    if reinitted_id in clique_sim.tracked_cliques.keys(): 
+                        c = reinitted_id  
+            if c not in clique_sim.tracked_cliques.keys(): 
+                #print("c is not in tracked clique keys!")
+                continue 
+
+        clique_sim.tracked_cliques[c]._clique_likelihood = int_clique_results[c]["clique_likelihood"] 
+        clique_sim.tracked_cliques[c]._log_clique_evidence = int_clique_results[c]["log_clique_evidence"] 
+        clique_sim.tracked_cliques[c]._last_observation_time = int_clique_results[c]["last_observation_time"] 
+        clique_sim.tracked_cliques[c]._log_likelihood = int_clique_results[c]["log_likelihood"] 
+        clique_sim.tracked_cliques[c]._log_clique_lower_evidence_sum = int_clique_results[c]["log_clique_lower_evidence_sum"] 
+        print("int_clique_results[c].keys(): ",int_clique_results[c].keys())
+        init_t = int_clique_results[c]["init_tstep"]
+        clique_sim.tracked_cliques[c]._initialization_time = [init_t for x in clique_sim.tracked_cliques[c]._initialization_time]
+        clique_sim.init_tstep = init_t 
+
+    int_slam_pickle_path = os.path.join(postProcessing_dir,"int_results/exp"+str(start_exp)+"_int_slam_results"+str(start_t)+".pickle") 
+    with open(os.path.join(int_slam_pickle_path),"rb") as handle: 
+        int_slam_results = pickle.load(handle) 
+
+    #slam = fastSLAM2(parameters["slam"]["n_particles"],gt_car_traj[0,:],localization_covariance,observed_clique_ids,all_data_associations[start_exp]) 
+    for k in range(len(slam.particles)): 
+        #print("reinitting the slam particles... this is k:{} out of {} particles".format(k,len(slam.particles)))
+        slam.particles[k].weight = int_slam_results[k]["weight"]
+        slam.particles[k].pose = int_slam_results[k]["pose"]
+        for i,lm in enumerate(slam.particles[k].landmark): 
+            #print("processing {} out of {} landmarks...".format(i,len(slam.particles[k].landmark)))
+            lm_id = lm.lm_id 
+            if lm_id not in int_slam_results[k]["landmarks"].keys():
+                #these are older ids: int_slam_results[k]["landmarks"].keys()
+                reinitted_id = get_reinitted_id(clique_sim.all_data_associations,start_exp,lm_id) 
+                #print("reinitted_id: ",reinitted_id)
+                if reinitted_id in int_slam_results[k]["landmarks"].keys():
+                    lm_id = reinitted_id
+                '''
+                else:
+                    lm = fast_slam_landmark(False,np.zeros((2,1)),np.zeros((2,2)),slam.Hfun,slam.hfun,slam.Qt,lm_id)   
+                    slam.particles[k].landmark.append(lm) 
+                    lm.isobserved = False 
+                    lm.EKF.mu = np.zeros((2,1))
+                    lm.EKF.Sigma = np.zeros((2,2))
+                    lm.EKF.p = 0 
+                '''
+            else: 
+                lm.isobserved = int_slam_results[k]["landmarks"][lm_id]["isobserved"]
+                lm.EKF.mu = int_slam_results[k]["landmarks"][lm_id]["mu"]
+                lm.EKF.Sigma = int_slam_results[k]["landmarks"][lm_id]["sigma"]
+                lm.EKF.p = int_slam_results[k]["landmarks"][lm_id]["p"]
+            
+    return clique_sim,slam 
 
 def get_observed_clique_ids(experiment_no,all_clique_feats,performance_tracker):
-    #get_observed_clique_ids(exp,all_clique_feats,self.performance_tracker)
     all_observed_clique_ids = [x for x in all_clique_feats.keys()] 
+    #print("experiment_no: ",experiment_no)
     observed_clique_ids = []
     for id_ in all_observed_clique_ids: 
-        #all_data_associations,n,id_
-        if experiment_no > 1:
-            orig_id = get_reinitted_id(performance_tracker.all_data_associations,experiment_no,id_)
-        else:
-            orig_id = id_
-        if orig_id not in observed_clique_ids:
-            #print("appending this id to observed clique ids:",orig_id)
-            observed_clique_ids.append(orig_id)
+        '''
+        orig_id = id_
+        print("id_:",id_)
+        if experiment_no > min(performance_tracker.all_data_associations.keys()): 
+            print("getting_reinitted_id ...")
+            id_ = get_reinitted_id(performance_tracker.all_data_associations,experiment_no,id_)
+            print("this is id_ now:",id_)
+        '''
+        if id_ not in observed_clique_ids:
+            observed_clique_ids.append(id_)
+
+    #print("observed_clique_ids: ",observed_clique_ids)
     return observed_clique_ids 
 
 def get_data_association(n_experiments,results_dir):
     data_association = {}
     for exp in range(n_experiments): 
         #exp0_data_association.csv
-        filepath = "/data_associations/exp"+str(exp)+"_data_association.csv"
-        arr = np.genfromtxt(results_dir + filepath,delimiter=" ")
+        filepath = os.path.join(results_dir,"data_associations/exp"+str(exp)+"_data_association.csv")
+    
+        if not os.path.exists(filepath): 
+            #print("getting data_association ... this doesn't exist: ",filepath)
+            exp_no = exp + 1
+            filepath = os.path.join(results_dir,"data_association/experiment"+str(exp_no)+"data_association.csv")
+        
+        arr = np.genfromtxt(filepath,delimiter=" ")
         if np.isnan(arr).any():
             print("arr:",arr)
             raise OSError
         data_association[exp] = arr 
     return data_association
-
-def get_reinitted_id(all_data_associations,n,id_,optional_exp=None): 
-    #print("getting reinitted_id!")
-    if n == 1:
-        #print("n is one... returning this id: ",id_)
-        if optional_exp is not None:
-            #print("in here!")
-            lms_i = all_data_associations[n]
-            matching_data_associations = all_data_associations[min(all_data_associations.keys())]
-            if id_ in matching_data_associations[:,0]:
-                idx = np.where(matching_data_associations[:,0] == id_)
-                lm_id_pos = np.reshape(matching_data_associations[idx,1:],(2,1))
-                if len(lm_id_pos) < 2:
-                    raise OSError 
-            else: 
-                for k in all_data_associations.keys(): 
-                    matching_data_associations = all_data_associations[k]
-                    if id_ in matching_data_associations[:,0]: 
-                        idx = np.where(matching_data_associations[:,0] == id_)
-                        lm_id_pos = np.reshape(matching_data_associations[idx,1:],(2,1))
-                        break 
-            row_idx = complicated_function(lms_i,lm_id_pos)
-            #print("row_idx:",row_idx)
-            if row_idx is None or lms_i[row_idx,0] == id_:
-                #print("made this condition...")
-                lms_i = all_data_associations[n+1]
-                if len(lm_id_pos) == 0:
-                    raise OSError 
-                row_idx = complicated_function(lms_i,lm_id_pos)
-            reinitted_id = lms_i[row_idx,0]
-            return reinitted_id
-        
-        else:
-            return id_
-    
-    if all_data_associations is None: 
-        print("all_data_associations is NONE")
-        raise OSError 
-
-    #want to see if this landmark existed in experiments before this    
-    if id_ in all_data_associations[min(all_data_associations.keys())][:,0]:
-        if optional_exp is not None:
-            #print("in here!")
-            matching_data_associations = all_data_associations[min(all_data_associations.keys())]
-            idx = np.where(matching_data_associations[:,0] == id_)
-            lm_id_pos = matching_data_associations[idx,1:]
-            lms_i = all_data_associations[n]
-            if len(lm_id_pos) == 0:
-                raise OSError
-            row_idx = complicated_function(lms_i,lm_id_pos)
-            #print("this is row_idx:",row_idx)
-            if row_idx is None:
-                lms_i = all_data_associations[n+1]
-                #print("this is lms_i:",lms_i)
-                if len(lm_id_pos) == 0:
-                    raise OSError
-                row_idx = complicated_function(lms_i,lm_id_pos)
-            reinitted_id = lms_i[row_idx,0]
-            return reinitted_id
-        else: 
-            return id_
-    
-    if not id_ in all_data_associations[n][:,0]:
-        if id_ in all_data_associations[n+1][:,0]:
-            n += 1 
-
-    idx = np.where(all_data_associations[n][:,0] == id_) 
-    lm_id_pos = all_data_associations[n][idx,1:]
-    reinitted_id = None 
-    i = n - 1
-    c = 0 
-    while 1 <= i:
-        lms_i = all_data_associations[i] 
-        if len(lm_id_pos) == 0:
-            raise OSError
-        row_idx = complicated_function(lms_i,lm_id_pos)
-        if not row_idx is None:
-            reinitted_id = lms_i[row_idx,0] 
-        i -= 1
-
-    return int(reinitted_id )
-
-def complicated_function(lms_i,lm_id_pos):
-    if len(lm_id_pos.shape) > 2:
-        #print("lm_id_pos.shape: ",lm_id_pos.shape)
-        lm_id_pos = lm_id_pos[0,0]
-    #print("lm_id_pos: ",lm_id_pos)
-    i0 = [i for i,x in enumerate(lms_i[:,1]) if x == lm_id_pos[0]]
-    i1 = [i for i,x in enumerate(lms_i[:,2]) if x == lm_id_pos[1]]
-    idx = [x for x in i0 if x in i1] 
-    if len(idx) > 1:
-        raise OSError 
-    elif len(idx) == 1: 
-        return idx[0] 
-    else:
-        return None 
-
-'''
-def get_reinitted_id(all_data_associations, n, id_, optional_exp=None):
-    #this is the chat gpt version
-    if n == 1:
-        if optional_exp is not None:
-            for exp_data in all_data_associations.values():
-                if id_ in exp_data[:, 0]:
-                    idx = np.where(exp_data[:, 0] == id_)
-                    lm_id_pos = exp_data[idx, 1:]
-                    if len(lm_id_pos) == 0:
-                        raise OSError
-                    row_idx = complicated_function(exp_data, lm_id_pos)
-                    if row_idx is not None:
-                        return exp_data[row_idx, 0]
-            return None
-        else:
-            return id_
-
-    if id_ not in all_data_associations[min(all_data_associations.keys())][:, 0]:
-        return None
-
-    for i in range(n - 1, 0, -1):
-        if id_ in all_data_associations[i][:, 0]:
-            exp_data = all_data_associations[i]
-            idx = np.where(exp_data[:, 0] == id_)
-            lm_id_pos = exp_data[idx, 1:]
-            if len(lm_id_pos) == 0:
-                raise OSError
-            row_idx = complicated_function(exp_data, lm_id_pos)
-            if row_idx is not None:
-                return exp_data[row_idx, 0]
-    return None
-
-def complicated_function(lms_i, lm_id_pos):
-    #this is the chat gpt version
-    if len(lm_id_pos.shape) > 2:
-        lm_id_pos = lm_id_pos[0, 0]
-    i0 = np.where(lms_i[:, 1] == lm_id_pos[0])[0]
-    i1 = np.where(lms_i[:, 2] == lm_id_pos[1])[0]
-    idx = np.intersect1d(i0, i1)
-    return idx[0] if len(idx) == 1 else None
-
-'''
 
 
 def extract_t_from_filename(filename): 
@@ -196,6 +225,90 @@ def get_sim_length(results_dir,experiment_no):
     else:
         return 500 
     
+def get_reinitted_id(all_data_associations,n,id_,optional_exp=None): 
+    if n < min(all_data_associations.keys()): 
+        n = min(all_data_associations.keys()) 
+    #first, find the location of the desired landmark 
+    lm_pos = None 
+    if id_ in all_data_associations[n][:,0]: 
+        idx = np.where(all_data_associations[n][:,0] == id_)
+        #print("idx: ",idx)
+        idx = int(np.squeeze(idx))
+        lm_pos = all_data_associations[n][idx,1:]
+    elif n < max(all_data_associations.keys()) and id_ in all_data_associations[n+1][:,0]: 
+        idx = np.where(all_data_associations[n + 1][:,0] == id_)
+        #print("idx: ",idx)
+        idx = int(np.squeeze(idx))
+        lm_pos = all_data_associations[n + 1][idx,1:] 
+    else: 
+        for i in all_data_associations.keys(): 
+            if id_ in all_data_associations[i][:,0]: 
+                idx = np.where(all_data_associations[i][:,0] == id_)
+                #print("idx: ",idx)
+                idx = int(np.squeeze(idx))
+                lm_pos = all_data_associations[i][idx,1:] 
+                break 
+    
+    if lm_pos is None: 
+        #print("WARNING: this landmark doesnt even exist!")
+        return None 
+    
+    if optional_exp is not None: 
+        if optional_exp < min(all_data_associations.keys()): 
+            optional_exp = min(all_data_associations.keys()) 
+
+        if optional_exp in all_data_associations.keys(): 
+            lms_desired_exp = all_data_associations[optional_exp]
+            #indices = np.where((n_array == lm_pos).all(axis=1))[0]
+            idx = np.where((lms_desired_exp[:,1:] == lm_pos).all(axis=1))[0] 
+            if idx is not None and idx.size > 0: 
+                #print("idx: ",idx) 
+                idx = int(np.squeeze(idx)) 
+                if not isinstance(lms_desired_exp[idx,0],int): 
+                    if not isinstance(lms_desired_exp[idx,0],float): 
+                        print("lms_desired_exp[idx,0]: ",lms_desired_exp[idx,0])
+                        raise OSError 
+                return lms_desired_exp[idx,0]
+            else: 
+                if optional_exp + 1 <= max(all_data_associations.keys()): 
+                    lms_desired_exp = all_data_associations[optional_exp + 1] 
+                    idx = np.where((lms_desired_exp[:,1:] == lm_pos).all(axis=1))[0] 
+                    if idx is not None and idx.size > 0:  
+                        idx = int(np.squeeze(idx))  
+                        if not isinstance(lms_desired_exp[idx,0],int): 
+                            if not isinstance(lms_desired_exp[idx,0],float): 
+                                print("lms_desired_exp[idx,0]: ",lms_desired_exp[idx,0])
+                                raise OSError 
+                        return lms_desired_exp[idx,0]   
+                    else:
+                        return None 
+                else:
+                    return None 
+        else:
+            print("optional_exp: ",optional_exp)
+            print("all_data_associations.keys(): ",all_data_associations.keys())
+            print("this experiment isnt in the data association keys") 
+            raise OSError 
+
+    else: 
+        #want to find the first instance of this landmark 
+        for i in range(n): 
+            if i not in all_data_associations.keys(): 
+                exp = i + 1 
+            else: 
+                exp = i 
+            #indices = np.where((n_array == lm_pos).all(axis=1))[0]
+            idx = np.where((all_data_associations[exp][:,1:] == lm_pos).all(axis=1))[0]
+            if idx is not None: 
+                #print("idx: ",idx)
+                idx = int(np.squeeze(idx)) 
+                if not isinstance(all_data_associations[exp][idx,0],int): 
+                    if not isinstance(all_data_associations[exp][idx,0],float): 
+                        print("all_data_associations[exp][idx,0]:",all_data_associations[exp][idx,0])
+                        raise OSError
+                return all_data_associations[exp][idx,0] 
+            
+    return None 
 
 def point_in_trapezoid(point, vertices):
     """
@@ -250,48 +363,10 @@ def point_in_trapezoid(point, vertices):
         p2 = vertices[(i + 1) % n]
         #print("this is p2: ",p2)    
         if p1[1] <= point[1]:
-            '''
-            print("in the if...")
-            print("this is_left(p1, p2, point): ",is_left(p1, p2, point))
-            orientation = is_left(p1, p2, point)
-            print("this is orientation: ",orientation)
-            if  orientation < 0:
-                bool = True 
-            else: 
-                bool = False
-            ax[i].plot([p1[0],p2[0]],[p1[1],p2[1]],color="k")
-            ax[i].scatter(point[0],point[1],color="r",marker="*")
-            #self.ax.text(self.gt_trees[i,1],self.gt_trees[i,2],str(self.gt_trees[i,0]),fontsize=6,color="k",ha='center', va='center')
-            ax[i].text(420, 240,str(orientation),color="k",ha="left",va = "center")
-            if bool:
-                ax[i].text(0.75, 0.95, f'Point is Left', ha='right', va='top', wrap=True, transform=ax[i].transAxes)
-            else:
-                ax[i].text(0.75, 0.95, f'Point is Right', ha='right', va='top', wrap=True, transform=ax[i].transAxes)
-
-            '''
-            
             if p2[1] > point[1] and is_left(p1, p2, point) < 0:
                 #print("incrimenting the winding number")
                 wn += 1
         else:
-            '''
-            ax[i].plot([p1[0],p2[0]],[p1[1],p2[1]],color="k")
-            ax[i].scatter(point[0],point[1],color="r",marker="*")
-            orientation = is_left(p1, p2, point) 
-            print("this is orientation: ",orientation)
-            if orientation < 0:
-                bool = True 
-            else:
-                bool = False
-            ax[i].text(420, 240,str(orientation),color="k",ha="left",va = "center")
-            if bool:
-                ax[i].text(0.75, 0.95, f'Point is Left', ha='right', va='top', wrap=True, transform=ax[i].transAxes)
-            else:
-                ax[i].text(0.75, 0.95, f'Point is Right', ha='right', va='top', wrap=True, transform=ax[i].transAxes)
-                print("in the else...")
-                print("this is_left(p1, p2, point):",is_left(p1, p2, point))
-            '''
-            
             if p2[1] <= point[1] and is_left(p1, p2, point) < 0:
                 #print("decreasing the winding number")
                 wn -= 1
@@ -375,16 +450,18 @@ class CamProjector:
 
 
 class simUtils(): 
-    def __init__(self,exp,data_association,parameters,max_range=100):
+    def __init__(self,exp,data_association,parameters,max_range=250):
         self.results_dir = parameters["results_dir"] 
         self.experiment = exp 
         self.width = parameters["vehicle_parameters"]["img_width"]
         self.height = parameters["vehicle_parameters"]["img_height"]
         self.fov = parameters["vehicle_parameters"]["fov"]
         self.max_range = max_range
-        self.miss_detection_probability_function = parameters["betterTogether"]["miss_detection_probability_function"]
+        #miss_detection_probability_function = lambda d: -2*10**(-6)*d**2 + .0025*d 
+        ps = parameters["betterTogether"]["miss_detection_probability_parameters"]
+        self.miss_detection_probability_function = lambda d:ps[0]*d**2 + ps[1]*d 
         self.sensor_noise_variance = parameters["betterTogether"]["sensor_noise_variance"]
-        self.data_association = data_association 
+        self.all_data_associations = data_association 
         self.K = self.build_projection_matrix()
 
     def get_range_bearing(self,p0,p1,enable_noise_variance=True):
@@ -640,7 +717,9 @@ class simUtils():
             min_theta = np.deg2rad(robot_pose[2]*180/np.pi - (self.fov/2)) - np.deg2rad(delta_theta) 
             max_theta = np.deg2rad(robot_pose[2]*180/np.pi + (self.fov/2)) + np.deg2rad(delta_theta)
             if robot_pose[2] > 2*np.pi:
+                print("robot_pose: ",robot_pose)
                 raise OSError
+            
         x0 = robot_pose[0] + min_d*np.cos(min_theta)
         y0 = robot_pose[1] + min_d*np.sin(min_theta)
         x1 = robot_pose[0] + min_d*np.cos(max_theta)
@@ -669,12 +748,11 @@ class simUtils():
             #everything is ok
             return True 
 
-    def reform_observations(self,t,car_pose,carla_observations_t,enable_miss_detection=True,enable_noise_variance=True): 
-        #print("this is car pose: ",car_pose)
-        #print("this is t: ",t)
+    def reform_observations(self,exp,t,car_pose,carla_observations_t,enable_miss_detection=True,enable_noise_variance=True): 
         camera_pose_t = self.get_camera_pose(t)
         #print("camera_pose_t:",camera_pose_t)
         #so we cant use the gt location of the camera from the sim, we need to get the transfom using the rigid body transform 
+
         sixd_cam_pose = np.zeros((6,))
         gt_range = 0.3; gt_yaw = -11.3645*(np.pi/180)
         sixd_cam_pose[0] = car_pose[0] + gt_range*np.cos(gt_yaw)
@@ -685,24 +763,17 @@ class simUtils():
         #need to get camera pose, depth 
         observations = []
 
-        #print("carla_observations_t.keys():",carla_observations_t.keys())
         for lm_id in carla_observations_t.keys():
-            '''
-            print("this is lm_id:",lm_id)
-            print("carla_observations_t[lm_id]:",carla_observations_t[lm_id])
-            print("these are the keys: ",carla_observations_t[lm_id].keys())
-            '''
             for feat_id in carla_observations_t[lm_id].keys():
                 detx = {}
-                detx["clique_id"] = get_reinitted_id(self.data_association,self.experiment,lm_id) 
+                #self.all_data_associations = data_association 
+                detx["clique_id"] = lm_id
+                #detx["clique_id"] = get_reinitted_id(self.all_data_associations,self.experiment,lm_id) 
                 #print("this is lm_id: ",lm_id)
                 detx["feature_id"] = feat_id
-                #def get_world_pt(results_dir,experiment,frame,lm_id,width,height,fov,px_coord,camera_pose,depth):
-                #print("carla_observations_t[lm_id][feat_id]:",carla_observations_t[lm_id][feat_id])
-                #print("these are the keys:",carla_observations_t[lm_id][feat_id].keys())
                 feat_loc = carla_observations_t[lm_id][feat_id]["feat_loc"] 
                 feat_des = carla_observations_t[lm_id][feat_id]["feat_des"]
-                detx["feature_id"]["feature_des"] = feat_des
+                detx["feature_des"] = feat_des
                 #print("feat_loc: ",feat_loc)
                 depth = self.get_depth(t,feat_loc)
                 #print("depth:",depth)
@@ -715,16 +786,9 @@ class simUtils():
                         #check if we would have been able to observe it if our trajectory was ground truth
                         if not self.check_observation_w_gt(camera_pose_t,depth,feat_loc):
                             print("this is not observable!")
-                            idx = np.where(self.data_association[:,0] == lm_id)
-                            if not lm_id in self.data_association[:,0]: 
+                            idx = np.where(self.all_data_associations[exp+1][:,0] == lm_id)
+                            if not lm_id in self.all_data_associations[exp+1][:,0]: 
                                 continue 
-                            '''
-                            print("self.data_association[lm_id,:]",self.data_association[idx,:])
-                            print("world_pt: ",world_pt)
-                            print("sixd_cam_pose: ",sixd_cam_pose)
-                            print("feat_loc:",feat_loc)
-                            print("depth:",depth)
-                            '''
                             #print("this is range: ",np.linalg.norm(world_pt - sixd_cam_pose[:3]))
                             #plot the car with points
                             fig,ax = plt.subplots()
@@ -766,20 +830,7 @@ class simUtils():
                 
                 #bearing, range_ = self.get_range_bearing(sixd_cam_pose,world_pt,car_pose,enable_noise_variance) #this bearing is in degrees
                 bearing, range_ = self.get_range_bearing(car_pose,world_pt)
-                '''
-                if bearing is None or range_ is None:
-                    fig,ax = plt.subplots()
-                    ax.scatter(car_pose[0],car_pose[1],color="k")
-                    pointer_x = car_pose[0] + 2*np.cos(np.deg2rad(car_pose[5]))
-                    pointer_y = car_pose[1] + 2*np.sin(np.deg2rad(car_pose[5]))
-                    ax.plot([car_pose[0],pointer_x],[car_pose[1],pointer_y],color="k")
-                    ax.plot(sixd_cam_pose[0],sixd_cam_pose[1],color="b")
-                    ax.scatter(world_pt[0],world_pt[1],color="r",marker="*")
-                    self.plot_frustrum(car_pose)
-                    ax.set_aspect('equal')
-                    plt.show(block=True)
-                    raise OSError
-                '''
+
                 if range_ < self.max_range:
                     #print("bearing: {},range_: {}".format(bearing,range_))
                     detx["bearing"] = bearing 
@@ -792,10 +843,63 @@ class simUtils():
                     else:
                         detection_var = 1 
                     detx["detection"] = detection_var 
-                '''
-                else:
-                    print("this is out of range!")
-                '''
-                observations.append(detx)
+
+                    observations.append(detx)
 
         return observations 
+    
+def reject_outliers(sim_utils,car_pose,feature_detections):
+    rad_heading = car_pose[2] * (np.pi/180) 
+    rad_car_pose = car_pose; rad_car_pose[2] = rad_heading 
+    frustrum_verts = sim_utils.get_frustrum_verts(rad_car_pose)
+    sixd_cam_pose = np.zeros((6,))
+    gt_yaw = car_pose[2] 
+    gt_range = 0.3; gt_yaw = -11.3645*(np.pi/180)
+    sixd_cam_pose[0] = car_pose[0] + gt_range*np.cos(gt_yaw)
+    sixd_cam_pose[1] = car_pose[1] + gt_range*np.sin(gt_yaw)
+    sixd_cam_pose[2] =  1.7 
+    sixd_cam_pose[-1] = np.deg2rad(car_pose[2]) 
+    
+    unique_clique_ids = np.unique([x["clique_id"] for x in feature_detections]) 
+    inlier_detections = []
+    for id_ in unique_clique_ids: 
+        clique_detx = [x for x in feature_detections if x["clique_id"] == id_] 
+        #print("there are {} feature detections for this id_".format(len(clique_detx)))
+        world_pts_lm = []
+        for detx in clique_detx: 
+            world_pt_x = car_pose[0] + detx["range"] * np.cos(detx["bearing"]) 
+            world_pt_y = car_pose[1] + detx["range"] * np.sin(detx["bearing"]) 
+            world_pts_lm.append([world_pt_x,world_pt_y]) 
+        world_pts_lm = np.array(world_pts_lm) 
+        X = world_pts_lm[:,0].reshape(-1,1) 
+        y = world_pts_lm[:,1]  
+        if len(world_pts_lm) > 1: 
+            ransac = make_pipeline(PolynomialFeatures(degree=1), RANSACRegressor(residual_threshold=1.0,max_trials=1000,min_samples=2))  
+            ransac.fit(X, y) 
+            inlier_mask = ransac.named_steps['ransacregressor'].inlier_mask_
+            #print("inlier_mask: ",inlier_mask)
+            inlier_pts = world_pts_lm[inlier_mask] 
+        else:
+            inlier_mask = [True] 
+        #print("inlier_pts: ",inlier_pts) 
+        observable_detections = []
+        for i,inliner_bool in enumerate(inlier_mask): 
+            if inliner_bool: 
+                pt = world_pts_lm[i] 
+                #print("pt: ",pt) 
+                #print("frustrum_verts: ",frustrum_verts)
+                if pt.size != 2:
+                    print("pt.size: ",pt.size) 
+                    raise OSError 
+                if point_in_trapezoid(pt,frustrum_verts): 
+                    observable_detections.append(clique_detx[i]) 
+        '''
+        if not point_in_trapezoid(world_pt,verts):
+            if np.linalg.norm(world_pt - sixd_cam_pose[:3]) < self.max_range*0.9:
+        '''
+        if len(observable_detections) == 0 and len(world_pts_lm) > 0:
+            print("WARNING: THESE ARENT OBSERVABLE") 
+
+        inlier_detections.extend(observable_detections)  
+
+    return inlier_detections 

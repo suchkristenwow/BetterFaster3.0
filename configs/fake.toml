@@ -1,6 +1,5 @@
 results_dir = "/home/kristen/BetterFaster3.1/betterFaster/sim_utils/fake_data" 
 isCarla = false
-skip_writing_files = false 
 experiments = 10 
 sim_length = 500 
 
@@ -26,8 +25,11 @@ hamming_distance_similarity = 10
 
 [slam]
 n_particles = 25
-localization_covariance_params = [0.04,0.04,0.25]
+localization_covariance_params = [0.004,0.004,0.02]
+betas = [0.05,0.02] 
+
 [vehicle_parameters]
+maxD = 10 
 img_width = 1392 
 img_height = 1024 
 fov = 72 

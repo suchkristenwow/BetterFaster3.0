@@ -19,31 +19,34 @@ def wrap_angle(angle):
     return wrapped_angle
 
 class betterFaster_plot:
-    def __init__(self,n_experiments,exp,parameters,gt_car_traj,observed_clique_ids,gt_gstates,prev_lm_est_err=None,data_association=None,frame_dir=None,show_plots=False,verbose=False):
+    def __init__(self,n_experiments,exp,parameters,gt_car_traj,observed_clique_ids,gt_gstates,prev_lm_est_err=None,data_association=None,frame_dir=None,show_plots=False,verbose=False,plot_int_results=False):
         if show_plots: 
             plt.ion() 
         self.show_plots = show_plots 
         print("initialize plotter...")
         sim_length = parameters["sim_length"]
         results_dir = parameters["results_dir"]
-        
+        self.isCarla = parameters["isCarla"]
+        self.maxD = parameters["vehicle_parameters"]["maxD"]
         if len(observed_clique_ids) <= 8:
             n_axis = len(observed_clique_ids)
         else:
             n_axis = 8
+
         self.posterior_cache = []
         self.observations_cache = np.zeros((sim_length,len(observed_clique_ids)))
 
         #Init all the figure axes 
-        fig, ax = plt.subplots() #this is for the animation thing 
+        fig, ax = plt.subplots(figsize=(12,12)) #this is for the animation thing 
         self.fig = fig; self.ax = ax 
-        self.traj_err_fig, self.traj_err_ax = plt.subplots() 
-        self.posterior_fig, self.posterior_ax = plt.subplots(nrows=1, ncols=n_axis, figsize=(22, 3))
-        self.lm_estimate_fig, self.lm_estimate_ax = plt.subplots(nrows=1, ncols=n_axis, figsize=(16,3))
-        self.gstate_err_fig, self.gstate_err_ax = plt.subplots(nrows=1, ncols=n_axis,figsize=(16,3)) 
+        #self.traj_err_fig, self.traj_err_ax = plt.subplots() 
+        if plot_int_results: 
+            self.posterior_fig, self.posterior_ax = plt.subplots(nrows=1, ncols=n_axis, figsize=(16, 3))
+            self.lm_estimate_fig, self.lm_estimate_ax = plt.subplots(nrows=1, ncols=n_axis, figsize=(16,3))
+            self.gstate_err_fig, self.gstate_err_ax = plt.subplots(nrows=1, ncols=n_axis,figsize=(16,3)) 
         self.exp = exp 
         self.sim_length = sim_length
-        self.observed_clique_ids = observed_clique_ids
+        self.observed_clique_ids = [x for x in observed_clique_ids] 
         self.fov = parameters["vehicle_parameters"]["fov"]
         self.gt_gstates = gt_gstates 
         #extract ground truth landmarks 
@@ -128,7 +131,11 @@ class betterFaster_plot:
             print("data_association:",data_association) 
             print("cone_ids: {},tree_ids: {}".format(cone_ids,tree_ids))
             raise OSError 
-        self.ax_bounds = self.determine_plot_bounds(gt_car_traj,observed_clique_ids)
+        if self.isCarla: 
+            self.ax_bounds = self.determine_plot_bounds_carla(observed_clique_ids) 
+        else: 
+            self.ax_bounds = self.determine_plot_bounds(gt_car_traj,observed_clique_ids)
+
         self.all_observed_cliques = []
         if len(self.gt_trees) == 0:
             raise OSError 
@@ -151,17 +158,15 @@ class betterFaster_plot:
                 #print("this is prev_lm_est_err.keys():",prev_lm_est_err.keys())
                 if id_ in prev_lm_est_err.keys():
                     self.lm_estimate_err_cache[id_] = prev_lm_est_err[id_]
-                else:
-                    print("WARNING: this landmark was initted this experiment and didnt exist in the previous one ")
-                    #input("Debugging ... press Enter to continue")
             else:
                 #print("self.exp: ",exp)
                 if not self.exp == 0:
                     raise OSError 
                 
         self.frame_dir = frame_dir  
-
+        self.n_total_experiments = n_experiments 
         #Timing stuff ... trying to go FAST 
+        self.plot_int_results = plot_int_results 
         self.verbose = verbose 
         if verbose:
             self.BEV_times = []
@@ -173,6 +178,7 @@ class betterFaster_plot:
         global_t = self.exp*self.sim_length + t 
 
         BEV_graph_time0 = time.time()
+
         #2D BEV GRAPH STUFF# 
         self.ax.clear()
         self.ax.set_xlim(self.ax_bounds[0],self.ax_bounds[1])
@@ -184,11 +190,19 @@ class betterFaster_plot:
         observed_clique_ids_t = np.array(np.unique([int(x["clique_id"]) for x in observations_t]))
         self.all_observed_cliques.extend([x for x in observed_clique_ids_t if x not in self.all_observed_cliques])
         
-        #print("this is observed clique ids at this timestep: ",observed_clique_ids_t)
         for clique_id in observed_clique_ids_t:
-            #print("updating observations_cache for clique_id: ",clique_id)
+            if clique_id not in self.observed_clique_ids: 
+                id_ = get_reinitted_id(self.all_data_associations,self.exp,clique_id,optional_exp=self.exp)
+                if id_ in self.observed_clique_ids:
+                    clique_id = id_  
+                else:
+                    print("this is id_: ",id_)
+                    print("this is observed clique ids at this timestep: ",observed_clique_ids_t)
+                    print("self.observed_clique_ids: ",self.observed_clique_ids)
+                    print("updating observations_cache for clique_id: ",clique_id)
+                    raise OSError     
+                
             idx = self.observed_clique_ids.index(clique_id)
-            #print("this is idx:",idx)
             if not isinstance(idx,int):
                 raise OSError
             self.observations_cache[t,idx] = 1
@@ -200,31 +214,30 @@ class betterFaster_plot:
         if len(self.gt_trees) > 0:
             for i in range(len(self.gt_trees)): 
                 #if self.gt_trees[i,0] in self.observed_clique_ids:
-                self.ax.scatter(self.gt_trees[i,1],self.gt_trees[i,2],color='green', marker='*')
+                self.ax.scatter(self.gt_trees[i,1],self.gt_trees[i,2],color='green', marker='*') 
 
             for i in range(len(self.gt_trees)):
                 #all_data_associations,n,id_)
-                reinitted_id = get_reinitted_id(self.all_data_associations,self.exp,self.gt_trees[i,0])
-                self.ax.text(self.gt_trees[i,1],self.gt_trees[i,2],str(reinitted_id),fontsize=8,color="k",ha='center', va='center')
+                #x_lower_bound,x_upper_bound,y_lower_bound,y_upper_bound 
+                if self.ax_bounds[0] < self.gt_trees[i,1] and self.gt_trees[i,1] < self.ax_bounds[1]: 
+                    if self.ax_bounds[2] < self.gt_trees[i,2]  and self.gt_trees[i,2] < self.ax_bounds[3]: 
+                        reinitted_id = get_reinitted_id(self.all_data_associations,self.exp,self.gt_trees[i,0]) 
+                        self.ax.text(self.gt_trees[i,1],self.gt_trees[i,2],str(reinitted_id),fontsize=8,color="k",ha='center', va='center')
 
         else:
             print("WARNING no trees")
         
         #plot the gt cones 
         if len(self.gt_cones) > 0:
-            '''
-            print("scattering cones... ")
-            print("there are {} cones".format(len(self.gt_trees)))
-            print("self.gt_cones: ",self.gt_trees)
-            '''
             for i in range(len(self.gt_cones)):
                 #if get_reinitted_id(self.gt_cones[i,0]) in self.observed_clique_ids:
                 self.ax.scatter(self.gt_cones[i,1],self.gt_cones[i,2],color="orange",marker="^")
 
             for i in range(len(self.gt_cones)):
-                #all_data_associations,n,id_)
-                reinitted_id = get_reinitted_id(self.all_data_associations,self.exp,self.gt_cones[i,0]) 
-                self.ax.text(self.gt_cones[i,1],self.gt_cones[i,2],str(reinitted_id),fontsize=8,color="k",ha='center', va='center')
+                if self.ax_bounds[0] < self.gt_cones[i,1] and self.gt_cones[i,1] < self.ax_bounds[1]: 
+                    if self.ax_bounds[2] < self.gt_cones[i,2] and self.gt_cones[i,2] < self.ax_bounds[3]: 
+                        reinitted_id = get_reinitted_id(self.all_data_associations,self.exp,self.gt_cones[i,0]) 
+                        self.ax.text(self.gt_cones[i,1],self.gt_cones[i,2],str(reinitted_id),fontsize=8,color="k",ha='center', va='center')
             
         else:
             print("WARNING no cones ")
@@ -237,65 +250,63 @@ class betterFaster_plot:
         x = robot_pose[0]
         y = robot_pose[1]
 
-        #print("robot_pose: ",robot_pose)
-        yaw = robot_pose[-1]
-        #print("yaw:",yaw)
+        print("robot_pose: ",robot_pose) 
 
-        #robot_circle = plt.Circle((x, y), 1.5, color='red', fill=True)
+        yaw = robot_pose[-1]
+        print("yaw:",yaw)
+        print("yaw(deg): ",np.rad2deg(yaw)) 
+
         robot_circle = plt.Circle((x, y), 0.35, color='red', fill=True)
-        # Calculate the end point of the arrow based on x, y, and yaw
-        dx = 1 * np.cos(yaw)
-        dy = 1 * np.sin(yaw)
+        # Calculate the end point of the arrow based on x, y, and yaw 
+        dx = np.cos(yaw)
+        dy = np.sin(yaw) 
+        
         #robot_pointer = self.ax.arrow(x, y, dx, dy, head_width=2, head_length=2, fc='red', ec='red')
         robot_pointer = self.ax.arrow(x, y, dx, dy, head_width=0.5, head_length=0.5, fc='red', ec='red')
         self.ax.add_patch(robot_circle)
         self.ax.add_patch(robot_pointer)
 
-        self.traj_estimate_cache[t,:] = np.array([x,y,yaw])
-        #plot the best estimate trajectory
-        if t > 0:
-            self.ax.plot(self.traj_estimate_cache[1:t,0],self.traj_estimate_cache[1:t,1],"r:",label="Trajectory Estimate")
-
         #plot the observations 
         self.plot_observations(robot_pose,observations_t) 
 
         self.plot_lm_ellipsoids(slam)
-
+        
         if self.verbose: 
             self.BEV_times.append(time.time() - BEV_graph_time0)
+        
         #END 2D BEV GRAPH STUFF# 
+        if self.plot_int_results: 
+            posterior_t0 = time.time() 
+            self.plot_posteriors(t,posteriors,observations_t)
+            self.posterior_fig.tight_layout()
+            if self.verbose:
+                self.posterior_times.append(time.time() - posterior_t0)
 
-        posterior_t0 = time.time() 
-        self.plot_posteriors(t,posteriors,observations_t)
-        self.posterior_fig.tight_layout()
-        if self.verbose:
-            self.posterior_times.append(time.time() - posterior_t0)
+            t0 = time.time() 
+            self.plot_lm_estimate_err(slam,observations_t,t)    
+            self.lm_estimate_fig.tight_layout() 
+            if self.verbose:
+                self.lm_estimate_times.append(time.time() - t0)
 
-        t0 = time.time() 
-        self.plot_lm_estimate_err(slam,observations_t,t)    
-        self.lm_estimate_fig.tight_layout() 
-        if self.verbose:
-            self.lm_estimate_times.append(time.time() - t0)
+            t0 = time.time()
+            self.plot_gstate_err(t,growth_state_estimates)
+            self.gstate_err_fig.tight_layout()
+            if self.verbose:
+                self.gstate_err_times.append(time.time() - t0)
 
-        t0 = time.time()
-        self.plot_gstate_err(t,growth_state_estimates)
-        self.gstate_err_fig.tight_layout()
-        if self.verbose:
-            self.gstate_err_times.append(time.time() - t0)
+            #self.plot_trajectory_err(t,robot_pose) #commented out bc idgaf about this plot sry
 
-        #self.plot_trajectory_err(t,robot_pose) #commented out bc idgaf about this plot sry
-
+        plt.pause(0.05) 
         if np.mod(t,5) == 0:
-            if self.show_plots:
-                plt.pause(0.05)
-
+            #if self.show_plots:
+            
             if self.verbose:
                 print("Mean BEV graph time: ",np.mean(self.BEV_times))
                 print("Mean Posterior Plotting Time: ",np.mean(self.posterior_times))
                 print("Mean LM Estimate Plot Time: ",np.mean(self.lm_estimate_times))
                 print("Mean GState Err Time: ", np.mean(self.gstate_err_times))
 
-            if self.frame_dir is not None: 
+            if self.frame_dir is not None and self.plot_int_results: 
                 if not os.path.exists(self.frame_dir): 
                     os.mkdir(self.frame_dir)
                 exp_frame_dir = os.path.join(self.frame_dir,"experiment"+str(self.exp))
@@ -316,23 +327,16 @@ class betterFaster_plot:
                 self.gstate_err_fig.savefig(os.path.join(exp_frame_dir,"gstate_err_frames/frame"+str(global_t).zfill(4)+".png"))
 
         if t == self.sim_length - 1:
-            if not os.path.exists("debugPlots"): 
-                os.mkdir("debugPlots")
-            plt.close(self.fig) 
-            self.posterior_fig.savefig(f"debugPlots/exp{self.exp}_posteriors.jpg")
-            plt.close(self.posterior_fig) 
-            self.lm_estimate_fig.savefig(f"debugPlots/exp{self.exp}_lmEstimateErr.jpg")
-            plt.close(self.lm_estimate_fig)
-            self.gstate_err_fig.savefig(f"debugPlots/exp{self.exp}_gstateErr.jpg")
-            plt.close(self.gstate_err_fig)
-            self.traj_err_fig.savefig(f"debugPlots/exp{self.exp}_trajErr.jpg")
-            plt.close(self.traj_err_fig)
-
-            '''
-            if self.frame_dir is not None: 
-                self.make_animations()
-            '''
-            print("WARNING ANIMATIONS ARE OFF")
+            if self.plot_int_results: 
+                if not os.path.exists("debugPlots"): 
+                    os.mkdir("debugPlots")
+                plt.close(self.fig) 
+                self.posterior_fig.savefig(f"debugPlots/exp{self.exp}_posteriors.jpg")
+                plt.close(self.posterior_fig) 
+                self.lm_estimate_fig.savefig(f"debugPlots/exp{self.exp}_lmEstimateErr.jpg")
+                plt.close(self.lm_estimate_fig)
+                self.gstate_err_fig.savefig(f"debugPlots/exp{self.exp}_gstateErr.jpg")
+                plt.close(self.gstate_err_fig)
 
     def parallel_animation_helper_fun(self,image_dir): 
         subdir_name = os.path.basename(image_dir) 
@@ -393,42 +397,58 @@ class betterFaster_plot:
             return 
         
         global_t = (self.exp)*self.sim_length + t   
+        
+        print("self.gt_gstates: ",self.gt_gstates)
 
-        #for i,id_ in enumerate(self.gt_gstates[:,0]): 
         for i in range(len(self.gstate_err_ax)):
-            #print("growth_state_estimates: ",growth_state_estimates)
-            #id_ = growth_state_estimates[i,0]
-            id_ = list(growth_state_estimates.keys())[i]
-            #print("id_:",id_)
             self.gstate_err_ax[i].clear() 
-            #plot gt for comparison
-            if id_ in self.gt_gstates[:,0]: 
-                idx = np.where(self.gt_gstates[:,0] == id_)
-                gt_gstate_id = int(self.gt_gstates[idx,1]) 
-            else: 
-                #print("entered the else statement.... this is id_: ",id_)
-                for i in self.all_data_associations.keys(): 
-                    if id_ in self.all_data_associations[i][:,0]:
-                        idx = np.where(self.all_data_associations[i][:,0] == id_) 
-                        reinit_id = self.all_data_associations[i][idx,0] 
-                        if reinit_id in self.gt_gstates[:,0]: 
-                            print("found reinit_id: ",reinit_id)
-                            break 
+            if i < len(growth_state_estimates.keys()): 
+                id_ = list(growth_state_estimates.keys())[i]
+                if id_ in self.gt_gstates[:,0]: 
+                    print("id_ is in self.gt_gstates!")
+                    idx = np.where(self.gt_gstates[:,0] == id_)
+                    gt_gstate_id = int(self.gt_gstates[idx,1]) 
+                else: 
+                    print("id_:",id_) 
+                    first_key = min([x for x in self.all_data_associations.keys()]) 
+                    if id_ in self.all_data_associations[first_key]:
+                        reinit_id = get_reinitted_id(self.all_data_associations,self.exp,id_,optional_exp=self.exp)  
+                        idx = int(np.where(self.gt_gstates[:,0] == reinit_id).squeeze()) 
+                        gt_gstate_id = int(self.gt_gstates[idx,1]) 
+                    else:
+                        for j in self.all_data_associations.keys(): 
+                            if id_ in self.all_data_associations[j][:,0]:
+                                idx = np.where(self.all_data_associations[j][:,0] == id_) 
+                                reinit_id = self.all_data_associations[j][idx,0] 
+                                if reinit_id in self.gt_gstates[:,0]: 
+                                    print("found reinit_id: ",reinit_id)
+                                    break 
+                            '''
+                            else:
+                                print("id is not in self.all_data_associations...") 
+                                print("self.all_data_associations[j]: ",self.all_data_associations[j]) 
+                            '''
+                        if reinit_id not in self.gt_gstates[:,0]:
+                            #print("self.all_data_associations: ",self.all_data_associations)
+                            gt_gstate_id = 0
+                        else:
+                            idx = np.where(self.gt_gstates[:,0] == reinit_id)
+                            gt_gstate_id = int(self.gt_gstates[idx,1])
+                gt_arr = np.ones((global_t,)) * gt_gstate_id 
+                self.gstate_err_ax[i].plot(np.arange(global_t),gt_arr,color="k")
+                tmp = growth_state_estimates[id_][:global_t] 
+                #print("tmp.shape: ",tmp.shape)
+                self.gstate_err_ax[i].plot(np.arange(global_t),growth_state_estimates[id_][:global_t],color="r",linestyle="--")
+                self.gstate_err_ax[i].set_title(f"Clique {id_}")
+                self.gstate_err_ax[i].set_ylim(-0.05,3.05)
 
-                if reinit_id not in self.gt_gstates[:,0]:
-                    gt_gstate_id = 0
-                else:
-                    idx = np.where(self.gt_gstates[:,0] == reinit_id)
-                    gt_gstate_id = int(self.gt_gstates[idx,1])
-
-            gt_arr = np.ones((global_t,)) * gt_gstate_id 
-            self.gstate_err_ax[i].plot(np.arange(global_t),gt_arr,color="k")
-            self.gstate_err_ax[i].plot(np.arange(global_t),growth_state_estimates[id_][:global_t],color="r",linestyle="--")
-            self.gstate_err_ax[i].set_title(f"Clique {id_}")
-            self.gstate_err_ax[i].set_ylim(-0.05,3.05)
-
-        #self.gstate_err_ax.set_title("Mean Growth State Error Rate")
         self.gstate_err_fig.suptitle("Growth State Estimates")
+        '''
+        if self.exp > 0:
+            if np.mod(100,t) == 0:
+                plt.pause(0.01)
+                input("Press Enter to Continue")
+        '''
 
     def plot_lm_estimate_err(self,slam,observations_t,t): 
         global_t = (self.exp)*self.sim_length + t 
@@ -439,19 +459,29 @@ class betterFaster_plot:
 
 
         idx = np.argmax([x.weight for x in slam.particles]) 
-        best_landmarks = slam.particles[idx].landmark 
+        #print("these are the particle weights: ",[x.weight for x in slam.particles]) 
+        best_landmarks = slam.particles[idx].landmarks
 
         for lm in best_landmarks:
             if not lm.lm_id in self.lm_estimate_err_cache.keys():
-                #print("self.lm_estimate_err_cache.keys(): ",self.lm_estimate_err_cache.keys())
-                #print("this lm id is not in the lm estimate err cache:",lm.lm_id)
-                id_ = get_reinitted_id(self.all_data_associations,self.exp,lm.lm_id)
-                #print("tried to get the reinitted id: ",id_)
+                for i in self.all_data_associations.keys(): 
+                    id_ = get_reinitted_id(self.all_data_associations,self.exp,lm.lm_id,optional_exp=i) 
+                    try:
+                        if id_ in self.lm_estimate_err_cache.keys(): 
+                            break 
+                    except: 
+                        print("this is id_: {}".format(id_))
+                        print("self.lm_estimate_err_cache: ",self.lm_estimate_err_cache)
+                        raise OSError 
             else:
                 id_ = lm.lm_id
-
-            self.lm_estimate_err_cache[id_][global_t] = self.get_lm_estimate_error(id_,best_landmarks)
-            #print("updated lm_estimate_err_cache for id_: {}, this is the lm_estimate_err: {}".format(id_,self.lm_estimate_err_cache[id_][t]))
+            #self.n_total_experiments
+            if id_ not in self.lm_estimate_err_cache.keys(): 
+                self.lm_estimate_err_cache[lm.lm_id] =  np.zeros((self.sim_length*self.n_total_experiments,))
+                self.lm_estimate_err_cache[lm.lm_id][global_t] = self.get_lm_estimate_error(id_,best_landmarks)
+            else: 
+                self.lm_estimate_err_cache[id_][global_t] = self.get_lm_estimate_error(id_,best_landmarks)
+                #print("updated lm_estimate_err_cache for id_: {}, this is the lm_estimate_err: {}".format(id_,self.lm_estimate_err_cache[id_][t])) 
 
         if np.mod(t,5) != 0:
             return 
@@ -477,20 +507,33 @@ class betterFaster_plot:
                 err_id = self.lm_estimate_err_cache[id_][:global_t] 
                 ax.plot(np.arange(global_t),err_id)
             #ax.set_ylim(-0.05,12)
-            ax.set_title("LM Estimation Error for " + str(id_))
+            ax.set_title("LM Estimation Error\n for clique: " + str(id_))
     
     def get_lm_estimate_error(self,id_,best_landmarks): 
         best_landmark_ids = [x.lm_id for x in best_landmarks]
+        #print("best_landmark_ids: ",best_landmark_ids)
         orig_id = None 
         if not id_ in best_landmark_ids:
-            orig_id = id_
-            id_ = get_reinitted_id(self.all_data_associations,self.exp,id_,optional_exp=1) 
+            id_ = None 
+            for i in self.all_data_associations.keys(): 
+                id_ = get_reinitted_id(self.all_data_associations,self.exp,id_,optional_exp=i)
+                if id_ in best_landmark_ids: 
+                    break
+            '''
+            id_ = get_reinitted_id(self.all_data_associations,self.exp,id_,optional_exp=min([x for x in self.all_data_associations.keys()])) 
             if id_ not in best_landmark_ids: 
+                print("self.all_data_associations: ",self.all_data_associations)
+                print("id_: ",id_) 
                 raise OSError
-            
-        idx = best_landmark_ids.index(id_)
-        center = best_landmarks[idx].EKF.mu
+            ''' 
+        if id_ is None: 
+            print("self.all_data_associations: ",self.all_data_associations)
+            print("id_: ",id_)
+            raise OSError 
 
+        idx = best_landmark_ids.index(id_)
+        #center = best_landmarks[idx].EKF.mu
+        center = best_landmarks[idx].mu 
         gt_loc = None 
 
         if id_ not in list(self.gt_trees[:,0]) + list(self.gt_cones[:,0]):
@@ -565,19 +608,32 @@ class betterFaster_plot:
         
     def plot_lm_ellipsoids(self,slam): 
         idx = np.argmax([x.weight for x in slam.particles]) 
-        best_landmarks = slam.particles[idx].landmark 
+        best_landmarks = slam.particles[idx].landmarks 
         #print("plotting lm ellipsoids... this is exp:",self.exp)
         for lm in best_landmarks:
-            lm_EKF = lm.EKF 
-            center = lm_EKF.mu  
+            center = lm.mu 
             if not np.all(center == 0):
                 #print("lm_id: {}, center_estimate: {}".format(lm.lm_id,center))
                 self.ax.scatter(center[0],center[1],color="blue",s=2)
                 self.ax.text(center[0] - 0.1,center[1] + 0.1,str(lm.lm_id),fontsize=8,color="blue",ha='center',va='center')
-                eigenvalues,eigenvectors = np.linalg.eigh(lm_EKF.Sigma) 
+                #print("lm_EKF.Sigma: ",lm_EKF.Sigma)
+                eigenvalues,eigenvectors = np.linalg.eigh(lm.sigma)  
                 angle = np.degrees(np.arctan2(*eigenvectors[:, 0][::-1])) 
                 # Create the ellipse
-                ellipse = Ellipse(xy=center, width=2*np.sqrt(eigenvalues[0]), height=2*np.sqrt(eigenvalues[1]),angle=angle,edgecolor="k",facecolor="None")
+                if eigenvalues[1] < 0:
+                    tmp = lm.sigma + 1e-3*np.eye(np.eye(lm.sigma.shape[0])) 
+                    eigenvalues,eigenvectors = np.linalg.eigh(tmp) 
+                    angle = np.degrees(np.arctan2(*eigenvectors[:, 0][::-1]))  
+                    '''
+                    print("center: {}".format(center))
+                    print("lm_EKF.Sigma: ",lm_EKF.Sigma)
+                    print("eigenvalues: ",eigenvalues)
+                    print("WARNING NEGATIVE EIGENVALUES")
+                    '''
+                try:
+                    ellipse = Ellipse(xy=center, width=2*np.sqrt(eigenvalues[0]), height=2*np.sqrt(eigenvalues[1]),angle=angle,edgecolor="k",facecolor="None")
+                except: 
+                    raise OSError 
                 self.ax.add_patch(ellipse) 
 
     def plot_posteriors(self, t, posteriors_t, observations_t):
@@ -590,7 +646,8 @@ class betterFaster_plot:
         plot_cache = np.array(self.posterior_cache)
 
         observed_cliques_t = np.unique([x["clique_id"] for x in observations_t])
-        unobserved_clique_ids = [x for x in self.observed_clique_ids if x not in observed_cliques_t]
+        unobserved_clique_ids = [x for x in self.observed_clique_ids if x not in observed_cliques_t] 
+        unobserved_clique_ids = [x for x in unobserved_clique_ids if x in posteriors_t.keys()] 
 
         for i, ax in enumerate(self.posterior_ax):
             ax.clear()
@@ -599,9 +656,13 @@ class betterFaster_plot:
             if i < len(observed_cliques_t):
                 clique_id = observed_cliques_t[i]
             else:
-                clique_id = unobserved_clique_ids[i - len(observed_cliques_t)]
+                if i - len(observed_cliques_t) < len(unobserved_clique_ids): 
+                    clique_id = unobserved_clique_ids[i - len(observed_cliques_t)]
+                else:
+                    return 
+
             idx = sorted(posteriors_t.keys()).index(clique_id)
-            ax.set_title("Posteriors for Clique " + str(clique_id))
+            ax.set_title("Posteriors for \n Clique " + str(clique_id))
             t_len = len(plot_cache[:, idx])
             t_range = np.arange(t + 1)
             if len(t_range) != t_len:
@@ -633,24 +694,42 @@ class betterFaster_plot:
             observation_ranges = []; observation_bearings = []
             for obs in observations_id:
                 observation_ranges.append(obs["range"])
-                #observation_bearings.append(obs["bearing"]*(np.pi/180)) 
+                #obs[bearing] is in degrees
                 observation_bearings.append(wrap_angle(obs["bearing"])) 
-            mean_range = np.mean(observation_ranges); mean_bearing = np.mean(observation_bearings) * (np.pi/180)
+                observation_x = robot_pose[0] + obs["range"]*np.cos(obs["bearing"]*(np.pi/180)) 
+                observation_y = robot_pose[1] + obs["range"]*np.sin(obs["bearing"]*(np.pi/180))
+                if id_ in self.gt_trees[:,0]:
+                    self.ax.plot([robot_pose[0],observation_x],[robot_pose[1],observation_y],linestyle="-.",color="green") 
+                    self.ax.scatter(observation_x,observation_y,color ="green",marker="x")  
+                elif id_ in self.gt_cones[:,0]:
+                    self.ax.plot([robot_pose[0],observation_x],[robot_pose[1],observation_y],linestyle="-.",color="orange") 
+                    self.ax.scatter(observation_x,observation_y,color="orange",marker="x") 
 
-            observation_x = robot_pose[0] + mean_range*np.cos(mean_bearing)
-            observation_y = robot_pose[1] + mean_range*np.sin(mean_bearing)
             
-            #print("mean_obervation estimate for clique {}: {},{}".format(id_,observation_x,observation_y))
+            mean_range = np.mean(observation_ranges); mean_bearing = np.mean(observation_bearings) * (np.pi/180)  
+            print("id_: {}, Mean range: {}, Mean bearing (rad): {}, Mean bearing (deg): {}".format(id_,mean_range,mean_bearing,np.mean(observation_bearings)))  
+  
+            observation_x = robot_pose[0] + mean_range*np.cos(mean_bearing) 
+            observation_y = robot_pose[1] + mean_range*np.sin(mean_bearing) 
 
             if id_ in self.gt_trees[:,0]: 
+                self.ax.text(observation_x,observation_y,str(id_),fontsize=8,color="green") 
+            elif id_ in self.gt_cones[:,0]:
+                self.ax.text(observation_x,observation_y,str(id_),fontsize=8,color="orange")   
+                
+            '''
+            if id_ in self.gt_trees[:,0]: 
+                self.ax.text(observation_x,observation_y,str(id_),fontsize=8,color="k",ha='center', va='center')
                 self.ax.plot([robot_pose[0],observation_x],[robot_pose[1],observation_y],linestyle="-.",color="green")
                 self.ax.scatter(observation_x,observation_y,color="green",marker="x")    
             else:
+                self.ax.text(observation_x,observation_y,str(id_),fontsize=8,color="k",ha='center', va='center') 
                 self.ax.plot([robot_pose[0],observation_x],[robot_pose[1],observation_y],linestyle="-.",color="orange")
                 self.ax.scatter(observation_x,observation_y,color="orange",marker="x")
+            '''
 
     def plot_frustrum(self,robot_pose): 
-        min_d = 0.1; max_d = 10
+        min_d = 0.1; max_d = self.maxD 
         #min_theta = np.deg2rad(robot_pose[-1]*(180/np.pi) - (self.fov/2))
         #max_theta = np.deg2rad(robot_pose[-1]*(180/np.pi)  + (self.fov/2))
         min_theta = robot_pose[-1] - np.deg2rad(self.fov/2)
@@ -667,6 +746,56 @@ class betterFaster_plot:
         self.ax.plot([x1,x2],[y1,y2],'b')
         self.ax.plot([x2,x3],[y2,y3],'b')
         self.ax.plot([x3,x0],[y3,y0],'b')
+    
+    def determine_plot_bounds_carla(self,observed_clique_ids): 
+        #observed_cone_idx = np.where(self.gt_cones[:,0] in observed_clique_ids) 
+        observed_cone_idx = [i for i,x in enumerate(self.gt_cones[:,0]) if x in observed_clique_ids] 
+        #observed_trees_idx = np.where(self.gt_trees[:,0] in observed_clique_ids) 
+        observed_trees_idx = [i for i,x in enumerate(self.gt_trees[:,0]) if x in observed_clique_ids]
+        observed_cone_pos = self.gt_cones[observed_cone_idx,1:] 
+        print("observed_cone_pos.shape: ",observed_cone_pos.shape) 
+        observed_tree_pos = self.gt_trees[observed_trees_idx,1:]
+        print("observed_tree_pos.shape: ",observed_tree_pos.shape) 
+        tree_delta_x = -np.inf; cone_delta_x = -np.inf 
+        if observed_cone_pos.size > 0:
+            cone_delta_x = max(observed_cone_pos[:,0]) - min(observed_cone_pos[:,0])  
+        if observed_tree_pos.size > 0:
+            tree_delta_x = max(observed_tree_pos[:,0]) - min(observed_tree_pos[:,0]) 
+        delta_x = max([cone_delta_x,tree_delta_x])  
+        cone_delta_y = -np.inf; tree_delta_y = -np.inf 
+        if observed_cone_pos.size>0:
+            cone_delta_y = max(observed_cone_pos[:,1]) - min(observed_cone_pos[:,1])  
+        if observed_tree_pos.size > 0: 
+            tree_delta_y = max(observed_tree_pos[:,1]) - min(observed_tree_pos[:,1])  
+        delta_y = min([cone_delta_y,tree_delta_y]) 
+        delta = max([delta_x,delta_y])  * 1.1
+        if observed_cone_pos.size > 0 and observed_tree_pos.size > 0:
+            min_x = min([min(observed_cone_pos[:,0]), min(observed_tree_pos[:,0])])  
+            max_x = max([max(observed_cone_pos[:,0]), max(observed_tree_pos[:,0])]) 
+            min_y = min([min(observed_cone_pos[:,1]), min(observed_tree_pos[:,1])]) 
+            max_y = max([max(observed_tree_pos[:,1]), max(observed_cone_pos[:,1])])  
+        elif observed_cone_pos.size == 0: 
+            #no cones observed
+            min_x = min(observed_tree_pos[:,0]) 
+            max_x = max(observed_tree_pos[:,0]) 
+            min_y = min(observed_tree_pos[:,1]) 
+            max_y = max(observed_tree_pos[:,1])  
+        elif observed_tree_pos.size == 0: 
+            #no trees observed
+            min_x = min(observed_cone_pos[:,0]) 
+            max_x = max(observed_cone_pos[:,0]) 
+            min_y = min(observed_cone_pos[:,1]) 
+            max_y = max(observed_cone_pos[:,1])  
+
+        mean_x = (max_x - min_x) / 2 
+        mean_y = (max_y - min_y) / 2 
+        x_lower_bound = mean_x - delta/2 
+        x_upper_bound = mean_x + delta/2 
+        y_lower_bound = mean_y - delta/2 
+        y_upper_bound = mean_y + delta/2 
+        ax_bounds = (x_lower_bound,x_upper_bound,y_lower_bound,y_upper_bound) 
+        return ax_bounds 
+
 
     def determine_plot_bounds(self,gt_car_traj,observed_clique_ids):
         #determine plot bounds 

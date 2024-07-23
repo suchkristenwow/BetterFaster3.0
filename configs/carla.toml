@@ -1,0 +1,37 @@
+results_dir = "/media/kristen/easystore1/BetterFaster/kitti_carla_simulator/exp_results" 
+isCarla = true 
+experiments = 11
+sim_length = 1000 
+
+[betterTogether]
+P_Miss_detection = 0.1
+P_False_detection = 0.025 
+lambda_u = 0.003 
+detection_threshold = 0.9 
+rejection_threshold = 0.5 
+min_feats = 3 
+max_feats = 100 
+sensor_noise_variance = 0.1
+confidence_range = 50 
+miss_detection_probability_parameters = [-0.000002,0.0025]
+
+[betterFaster]
+T_nu_cone = 9 
+T_nu_tree = 3
+growth_state_relevancy_level = 0.75 
+n_gstates = 3 
+hamming_distance_similarity = 10
+
+[slam]
+n_particles = 25
+localization_covariance_params = [0.04,0.04,0.25]
+[vehicle_parameters]
+img_width = 1392 
+img_height = 1024 
+fov = 72 
+
+[comparison_params]
+data_association_rates = [0.3,0.6,0.9]
+compare_betterTogether = false  
+compare_vanilla = false 
+compare_multiMap = false 

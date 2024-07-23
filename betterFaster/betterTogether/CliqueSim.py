@@ -1,9 +1,11 @@
 import numpy as np 
-from .clique_utils import get_tracked_cliques, cone_gstate_function, tree_gstate_function 
+from .clique_utils import get_tracked_cliques, cone_gstate_function, tree_gstate_function, get_n_clique_feats, get_init_time  
+from .JointPersistenceFilter import PersistenceFilter
 from betterFaster.sim_utils.utils import get_reinitted_id 
 from scipy.spatial.distance import cdist
 import os 
 import threading 
+import time 
 
 def compute_hamming_distances(descriptors1, descriptors2):
     # Convert binary arrays to integers for Hamming distance calculation
@@ -30,20 +32,25 @@ class clique_simulator():
         self.min_feats = parameters["betterTogether"]["min_feats"]
         self.max_feats = parameters["betterTogether"]["max_feats"]
         self.confidence_range = parameters["betterTogether"]["confidence_range"]
-        self.tune_bool = parameters["comparison_bools"]["compare_betterTogether"]
         self.clique_features = kwargs.get("all_clique_features")
         self.observed_ids = [x for x in self.clique_features.keys()]
         self.results_dir = parameters["results_dir"]
         self.current_exp = kwargs.get("current_exp")
         self.observations = kwargs.get("exp_observations")
         self.sim_length = kwargs.get("sim_length")
+        self.verbose = kwargs.get("verbosity")
+        self.enable_feature_detection = kwargs.get("feature_detection")
         self.lambda_u = parameters["betterTogether"]["lambda_u"]
         self.all_data_associations = kwargs.get("data_association")
         self.n_experiments = parameters["experiments"]
-        self.tracked_cliques = get_tracked_cliques(self.current_exp,parameters,self.all_data_associations[self.current_exp + 1],self.clique_features)
+        self.isCarla = parameters["isCarla"]
+        exp_obs_ids = kwargs.get("exp_obs_ids")
+        start_times = kwargs.get("start_time")
+        self.start_exp = start_times[0]; self.start_tstep = start_times[1]
+        self.tracked_cliques = get_tracked_cliques(self.results_dir,self.n_experiments,self.current_exp,self.sim_length,parameters,self.all_data_associations,self.clique_features,self.isCarla,exp_obs_ids)
         self.posteriors = {}
         self.growth_state_estimates = {} 
-        for c in self.observed_ids:
+        for c in self.tracked_cliques.keys():
             self.posteriors[c] = np.zeros((self.sim_length*self.n_experiments,))
             self.growth_state_estimates[c] = np.zeros((self.sim_length*self.n_experiments,))
         #GROWTH STATE TRACKING STUFF 
@@ -80,100 +87,261 @@ class clique_simulator():
 
         self.ever_obsd = []
 
-    def reinit_experiment(self,exp,observations): 
+        self.observation_cache = {} 
+
+        #Trying to go fast:
+        self.get_detection_lists_times = []
+        self.gstate_estimate_times = []
+        self.prediction_times = []
+        self.update_times = []
+        self.check_times = []
+
+        self.new_exp_ids = [] 
+        
+    #exp,exp_observations,all_clique_feats,observed_clique_id
+    def reinit_experiment(self,exp,observations,all_clique_feats,observed_clique_ids): 
         print("reinitting experiment...")
         self.current_exp = exp 
         self.observations = observations 
-        #new_tracked_cliques = get_tracked_cliques(exp,self.sim_length,self.lambda_u,self.clique_features,self.results_dir,self.min_feats,self.max_feats,self.data_association) 
-        new_tracked_cliques = get_tracked_cliques(exp,self.parameters,self.all_data_associations[self.current_exp + 1],self.clique_features)
-        for c in self.tracked_cliques.keys():
-            old_clique_likelihood = self.tracked_cliques[c]._clique_likelihood 
-            old_log_clique_evidence = self.tracked_cliques[c]._log_clique_evidence 
-            old_last_observation_time = self.tracked_cliques[c]._last_observation_time 
-            old_log_likelihood = self.tracked_cliques[c]._log_likelihood 
-            old_log_clique_lower_evidence_sum = self.tracked_cliques[c]._log_clique_lower_evidence_sum
-            self.tracked_cliques[c] = new_tracked_cliques[c]
-            self.tracked_cliques[c]._clique_likelihood = old_clique_likelihood 
-            self.tracked_cliques[c]._log_clique_evidence = old_log_clique_evidence 
-            self.tracked_cliques[c]._last_observation_time = old_last_observation_time
-            self.tracked_cliques[c]._log_likelihood = old_log_likelihood
-            self.tracked_cliques[c]._log_clique_lower_evidence_sum = old_log_clique_lower_evidence_sum 
+
+        new_tracked_cliques = get_tracked_cliques(self.results_dir,self.n_experiments,exp,self.sim_length,self.parameters,self.all_data_associations,self.clique_features,self.isCarla,observed_clique_ids)
+        #print("new_tracked_cliques.keys(): ",new_tracked_cliques.keys())
+
+        #debugging
+        for c in new_tracked_cliques.keys():
+            if np.any(new_tracked_cliques[c]._last_observation_time) is None:
+                print("new_tracked_cliques[c]._last_observation_time: ",new_tracked_cliques[c]._last_observation_time)
+                raise OSError  
+            '''
+            else:
+                print("new_tracked_cliques[c]._last_observation_time[0]: ",new_tracked_cliques[c]._last_observation_time[0])
+            '''
+
+        #print("previous clique feature keys: ",self.clique_features.keys())
+        self.clique_features = all_clique_feats 
+
+        for c in new_tracked_cliques.keys():
+            reinitted_id = get_reinitted_id(self.all_data_associations,exp,c,optional_exp=exp) 
+            orig_id = get_reinitted_id(self.all_data_associations,exp,c,optional_exp=0)
+            valid_id = True
+            if c not in self.tracked_cliques.keys():
+                if reinitted_id not in self.tracked_cliques.keys(): 
+                    #this is a new clique 
+                    if c in self.clique_features.keys():
+                        n_obsd_feat_ids = get_n_clique_feats(self.clique_features,c,self.max_feats,self.min_feats)
+                        init_time = get_init_time(self.results_dir,self.n_experiments,self.current_exp,self.sim_length,c,self.isCarla)
+                    else: 
+                        if reinitted_id in self.clique_features.keys(): 
+                            n_obsd_feat_ids = get_n_clique_feats(self.clique_features,reinitted_id,self.max_feats,self.min_feats)  
+                            init_time = get_init_time(self.results_dir,self.n_experiments,self.current_exp,self.sim_length,reinitted_id,self.isCarla) 
+                        elif orig_id in self.clique_features.keys(): 
+                            n_obsd_feat_ids = get_n_clique_feats(self.clique_features,orig_id,self.max_feats,self.min_feats) 
+                            init_time = get_init_time(self.results_dir,self.n_experiments,self.current_exp,self.sim_length,orig_id,self.isCarla) 
+                        else:
+                            valid_id = False
+                            for i in self.all_data_associations.keys(): 
+                                id_ = get_reinitted_id(self.all_data_associations,exp,c,optional_exp=i)
+                                if id_ in self.clique_features.keys():
+                                    #print("id_ is in self.clique_features!")
+                                    valid_id = True 
+                                    break  
+                            if valid_id: 
+                                n_obsd_feat_ids = get_n_clique_feats(self.clique_features,c,self.max_feats,self.min_feats,data_associations=self.all_data_associations)
+                                init_time = get_init_time(self.results_dir,self.n_experiments,self.current_exp,self.sim_length,c,self.isCarla) 
+                    if valid_id: 
+                        self.tracked_cliques[c] = PersistenceFilter(self.lambda_u,num_features=n_obsd_feat_ids,initialization_time=init_time) 
+                else: 
+                    #so c is in new_tracked_cliques.keys and reinitted_id is in self.tracked_cliques.keys() 
+                    old_clique_likelihood = self.tracked_cliques[reinitted_id]._clique_likelihood 
+                    old_log_clique_evidence = self.tracked_cliques[reinitted_id]._log_clique_evidence 
+                    old_last_observation_time = self.tracked_cliques[reinitted_id]._last_observation_time 
+                    if old_last_observation_time is None:
+                        raise OSError 
+                    old_log_likelihood = self.tracked_cliques[reinitted_id]._log_likelihood 
+                    old_log_clique_lower_evidence_sum = self.tracked_cliques[reinitted_id]._log_clique_lower_evidence_sum 
+                    #print("reinitted id is in self.tracked_cliques.keys(), updating it".format(reinitted_id))
+                    self.tracked_cliques[reinitted_id] = new_tracked_cliques[c]
+                    self.tracked_cliques[reinitted_id]._clique_likelihood = old_clique_likelihood 
+                    self.tracked_cliques[reinitted_id]._log_clique_evidence = old_log_clique_evidence 
+                    self.tracked_cliques[reinitted_id]._last_observation_time = old_last_observation_time
+                    self.tracked_cliques[reinitted_id]._log_likelihood = old_log_likelihood
+                    self.tracked_cliques[reinitted_id]._log_clique_lower_evidence_sum = old_log_clique_lower_evidence_sum  
+            else: 
+                #load in all the old stuff from the previous experiment 
+                old_clique_likelihood = self.tracked_cliques[c]._clique_likelihood 
+                old_log_clique_evidence = self.tracked_cliques[c]._log_clique_evidence 
+                old_last_observation_time = self.tracked_cliques[c]._last_observation_time 
+                if old_last_observation_time is None:
+                    raise OSError 
+                old_log_likelihood = self.tracked_cliques[c]._log_likelihood 
+                old_log_clique_lower_evidence_sum = self.tracked_cliques[c]._log_clique_lower_evidence_sum 
+                #print("c is not in self.tracked_cliques.keys(): ".format(c))
+                self.tracked_cliques[c] = new_tracked_cliques[c]
+                self.tracked_cliques[c]._clique_likelihood = old_clique_likelihood 
+                self.tracked_cliques[c]._log_clique_evidence = old_log_clique_evidence 
+                self.tracked_cliques[c]._last_observation_time = old_last_observation_time
+                self.tracked_cliques[c]._log_likelihood = old_log_likelihood
+                self.tracked_cliques[c]._log_clique_lower_evidence_sum = old_log_clique_lower_evidence_sum  
+                
+            if c not in self.posteriors.keys(): 
+                #get_reinitted_id(self.all_data_associations,self.current_exp,c)
+                reinitted_id = get_reinitted_id(self.all_data_associations,exp,c)
+                if reinitted_id not in self.posteriors.keys(): 
+                    self.posteriors[c] = np.zeros((self.sim_length*self.n_experiments,))
+            if c not in self.growth_state_estimates.keys(): 
+                reinitted_id = get_reinitted_id(self.all_data_associations,exp,c)
+                if reinitted_id not in self.growth_state_estimates.keys(): 
+                    self.growth_state_estimates[c] = np.zeros((self.sim_length*self.n_experiments,)) 
+
+        purge_ids = []
+        for c in self.tracked_cliques.keys(): 
+            orig_id = get_reinitted_id(self.all_data_associations,exp,c) 
+            reinitted_id =  get_reinitted_id(self.all_data_associations,exp,c,optional_exp=self.current_exp)
+            if np.any(self.tracked_cliques[c]._last_observation_time) is None:
+                if c in self.observation_cache.keys(): 
+                    if len(self.observation_cache[c]) == 0:
+                        raise OSError   
+                    last_obsd_time = max(self.observation_cache[c])
+                    self.tracked_cliques[c]._last_observation_time = [last_obsd_time for _ in self.tracked_cliques[c]._last_observation_time]
+                else:
+                    if reinitted_id in self.observation_cache.keys(): 
+                        last_obsd_time = max(self.observation_cache[reinitted_id]) 
+                        self.tracked_cliques[c]._last_observation_time = [last_obsd_time for _ in self.tracked_cliques[c]._last_observation_time]  
+                    elif orig_id in self.observation_cache.keys(): 
+                        last_obsd_time = max(self.observation_cache[reinitted_id]) 
+                        self.tracked_cliques[c]._last_observation_time = [last_obsd_time for _ in self.tracked_cliques[c]._last_observation_time]  
+                    else: 
+                        found_init_time = False 
+                        for x in self.all_data_associations.keys():
+                            reinitted_id = get_reinitted_id(self.all_data_associations,exp,c,optional_exp=x) 
+                            if reinitted_id in self.observation_cache.keys(): 
+                                last_obsd_time = max(self.observation_cache[reinitted_id]) 
+                                self.tracked_cliques[c]._last_observation_time = [last_obsd_time for _ in self.tracked_cliques[c]._last_observation_time]  
+                                found_init_time = True 
+                                break 
+                        
+                        if not found_init_time: 
+                            init_time = get_init_time(self.results_dir,self.n_experiments,self.current_exp,self.sim_length,c,self.isCarla)
+                            if init_time is not None: 
+                                '''
+                                print("WARNING: removing c:{} from tracked cliques".format(c))
+                                    #del self.tracked_cliques[c]
+                                    if c not in purge_ids:
+                                        purge_ids.append(c)
+                                else: 
+                                '''
+                                global_t = exp*self.sim_length
+                                if init_time < global_t:
+                                    print("init_time: {},global_t: {}".format(init_time,global_t))
+                                    print("self.observation_cache.keys():",self.observation_cache.keys())
+                                    print("self.tracked_cliques.keys(): ",self.tracked_cliques.keys()) 
+                                    print("self.tracked_cliques[c].init_tstep: ",self.tracked_cliques[c].init_tstep)
+                                    print("c: {}, orig_id: {}, reinitted_id: {}".format(c,orig_id,reinitted_id))
+                                    raise OSError 
+                                self.tracked_cliques[c]._last_observation_time = [init_time for _ in self.tracked_cliques[c]._last_observation_time]
+        
+        self.new_exp_ids = []
+        for c in observed_clique_ids: 
+            if c not in self.tracked_cliques.keys():
+                n_obsd_feat_ids = get_n_clique_feats(self.clique_features,c,self.max_feats,self.min_feats)
+                self.tracked_cliques[c] = PersistenceFilter(self.lambda_u,num_features=n_obsd_feat_ids,initialization_time=exp*self.sim_length)  
+                if c not in self.posteriors.keys(): 
+                    self.posteriors[c] = np.zeros((self.sim_length*self.n_experiments,))
+                if c not in self.growth_state_estimates.keys(): 
+                    self.growth_state_estimates[c] = np.zeros((self.sim_length*self.n_experiments,))
+                self.new_exp_ids.append(c)
+                '''
+                print("c: ",c)
+                reinitted_id = get_reinitted_id(self.all_data_associations,self.current_exp,c,optional_exp=self.current_exp)
+                orig_id = get_reinitted_id(self.all_data_associations,self.current_exp,c)
+                print("orig_id: {},reinitted_id: {}".format(orig_id,reinitted_id))
+                print("self.tracked_cliques.keys(): ",self.tracked_cliques.keys())
+                raise OSError  
+                '''
 
     def normalize(self,global_t):
+        if self.verbose:
+            print("normalizing ... ")
+            print("[self.tracked_cliques[x].init_tstep for x in self.tracked_cliques.keys()]:",[self.tracked_cliques[x].init_tstep for x in self.tracked_cliques.keys()]) 
+            print("global_t: ",global_t)
+
         observed_clique_id = [x for x in self.tracked_cliques.keys() if self.tracked_cliques[x].init_tstep <= global_t] 
         #print("these should be the cliques we already observed: ",observed_clique_id)
-
+    
         observed_posteriors = [self.posteriors[x][global_t] for x in observed_clique_id]
+        #print("len(observed_posteriors): ",len(observed_posteriors))
         #print("observed_posteriors: ",observed_posteriors)
 
-        norm_factor = max(observed_posteriors)
+        if len(observed_posteriors) > 0:
+            norm_factor = max(observed_posteriors)
 
-        normalized_posteriors = []
-        for c in self.posteriors.keys(): 
-            if c not in observed_clique_id:
-                #we havent observed this yet 
-                normalized_posteriors.append(1.0)
-            else:
-                p_c = self.posteriors[c][global_t]
-                if norm_factor == 0:
-                    print("WARNING NORMALIZATION FACTOR IS 0?")
-                    #input("Press Enter to Continue ...")
-                    p_c = 1 
-                else: 
-                    p_c = p_c / norm_factor 
-                if np.isnan(p_c):
-                    raise OSError 
-                elif np.isinf(p_c): 
-                    raise OSError
-                normalized_posteriors.append(p_c)
+            normalized_posteriors = []
+            if self.verbose: 
+                print("iterating through {} posteriors".format(len(self.posteriors.keys()))) 
+            for c in self.posteriors.keys(): 
+                if c not in observed_clique_id:
+                    #print("we havent observed this yet") 
+                    normalized_posteriors.append(1.0)
+                else:
+                    p_c = self.posteriors[c][global_t]
+                    if norm_factor == 0:
+                        print("WARNING NORMALIZATION FACTOR IS 0?")
+                        p_c = 1 
+                    else: 
+                        p_c = p_c / norm_factor 
+                    if np.isnan(p_c):
+                        raise OSError 
+                    elif np.isinf(p_c): 
+                        raise OSError
+                    #print("this is normalized: ",p_c)
+                    normalized_posteriors.append(p_c)
+
+        else: 
+            #print("literally nothing has ever been observed ever")
+            normalized_posteriors = [self.posteriors[x][global_t] if self.posteriors[x][global_t] <= 1 else 1 for x in self.tracked_cliques.keys()]
+
+        if len(normalized_posteriors) != len(self.posteriors.keys()): 
+            raise OSError 
+        
         return normalized_posteriors 
     
     def get_detection_lists(self,detections_t,observed_cliques): 
         detection_lists = {} 
         for c in observed_cliques:
-            #detection_lists[c] = np.random.choice([0, 1], size=len(self.clique_features[c].keys()))
+            orig_id = c
             if c not in self.clique_features.keys():
-                #(all_data_associations,n,id_): 
-                #print("get_reinitted_id... this is c:",c)
+                print("get_reinitted_id... this is c:",c) 
                 c = get_reinitted_id(self.all_data_associations,self.current_exp,c)
-            print("WARNING SETTING ALL FEATURES TO DETECTED...")
-            detection_lists[c] = [1 for _ in self.clique_features[c].keys()]
-            #detection_lists[c] = [0 for _ in self.clique_features[c].keys()]
-        '''  
-        for el in detections_t:
-            if el['detection']:
-                if el['clique_id'] in detection_lists.keys():
-                    if el['feature_id']-1 < len(detection_lists[el['clique_id']]) or np.random.rand() < self.P_Miss_detection:
-                        detection_lists[el['clique_id']][el['feature_id']-1] = 1 
-                    else:
-                        if el['feature_id'] > len(detection_lists[el['clique_id']]):
-                            print("wtf")
-                            print("el[feature_id]: ",el['feature_id'])
-                            print("len(detection_lists[el['clique_id']]): ",len(detection_lists[el['clique_id']]))
-                            raise OSError 
-      
-        for id_ in detection_lists.keys():
-            total_obsd_feats_id = sum(detection_lists[id_])
-            print("observed {} out of {} features for this clique: {}".format(total_obsd_feats_id,len(detection_lists[id_]),id_)) 
-        '''
+                if c is None:
+                    raise OSError 
+                if c not in self.clique_features.keys():
+                    print("this is reinitted_c: ",c)
+                    #print("self.clique_features.keys():",self.clique_features.keys())    
+                    for i in self.all_data_associations.keys(): 
+                        print("trying to get reinitted id ... this is exp: {}".format(i))
+                        c = get_reinitted_id(self.all_data_associations,self.current_exp,orig_id,optional_exp=i)
+                        print("this is reinitted id: ",c)
+                        if c in self.clique_features: 
+                            print("found correct reinitted id!")
+                            break 
+            
+            if c not in self.clique_features.keys():
+                print("observed_cliques: ",observed_cliques)
+                print("self.clique_features.keys(): ",self.clique_features.keys())
+                raise OSError 
+
+            #print("self.tracked_cliques.keys(): ",self.tracked_cliques.keys())
+            #print("this is c: ",c)
+            detection_lists[c] = [0 for _ in range(len(self.tracked_cliques[c]._log_likelihood))] 
+
+        if self.enable_feature_detection: 
+            for el in detections_t:
+                if el['detection']:
+                    if el['clique_id'] in detection_lists.keys():
+                        if el['feature_id']-1 < len(detection_lists[el['clique_id']]): #or np.random.rand() < self.P_Miss_detection:
+                            detection_lists[el['clique_id']][el['feature_id']-1] = 1 
+
         return detection_lists
-
-    '''
-    def remove_bad_single_feat_detections(self,detection_lists,observed_cliques,detections_t):
-        # remove bad single feature detections
-        bad_single_feat_detections = []
-        not_obsd_cliques = []
-        #if self.negative_suppresion:
-        for i,k in enumerate(detection_lists.keys()):
-            el = detections_t[i]
-            if np.sum(detection_lists[k]) <= 1 and self.confidence_range < el['range']:
-                bad_single_feat_detections.append(i)
-                not_obsd_cliques.append(observed_cliques[i])
-
-        detection_lists = {key: value for key, value in detection_lists.items() if key not in bad_single_feat_detections}
-        observed_cliques = [x for x in observed_cliques if x not in not_obsd_cliques]
-        return detection_lists, observed_cliques
-    '''
 
     def remove_bad_single_feat_detections(self, detection_lists, observed_cliques, detections_t):
         # Remove bad single feature detections
@@ -195,13 +363,25 @@ class clique_simulator():
 
         return detection_lists, observed_cliques
 
-    def parallel_update_helper(self,c,detection_list,t):
+    def parallel_update_helper(self,c,detection_list,t): 
         self.tracked_cliques[c].update(detection_list,t,self.P_Miss_detection,self.P_False_detection)
 
     def update(self,t,detections_t):
-        #print("entering clique update...")
-        observed_cliques = np.unique([x['clique_id'] for x in detections_t])
-        #print("observed these cliques this timestep: ",observed_cliques)
+        if self.verbose and np.mod(t,10) == 0: 
+            if len(self.get_detection_lists_times) > 10:
+                print("Detection times: ",np.mean(self.get_detection_lists_times))
+                print("Update times: ",np.mean(self.gstate_estimate_times))
+                print("Prediction times: ",np.mean(self.prediction_times))
+                print("Gstate estimation times: ",np.mean(self.gstate_estimate_times))
+                print("Debug check times: ",np.mean(self.check_times))
+
+        t0 = time.time()
+
+        observed_cliques = np.unique([x['clique_id'] for x in detections_t]) 
+        
+        if self.verbose: 
+            print("observed these cliques this timestep: ",observed_cliques)
+        
         self.ever_obsd.extend([x for x in observed_cliques if x not in self.ever_obsd])
 
         #Get detection lists 
@@ -209,98 +389,257 @@ class clique_simulator():
 
         #Remove bad single feat detections
         detection_lists,observed_cliques = self.remove_bad_single_feat_detections(detection_lists,observed_cliques,detections_t)
+        self.get_detection_lists_times.append(time.time() - t0)
 
         global_t = self.current_exp*self.sim_length + t 
 
         if global_t < 0:
             raise OSError
         
-        #Update observed cliques 
-        '''
-        for c in observed_cliques:    
-            print("updating clique {} ..................................".format(c))
-            self.tracked_cliques[c].update(detection_lists[c],global_t,self.P_Miss_detection,self.P_False_detection)
-        '''
-        threads = []
         for c in observed_cliques:
-            thread_c = threading.Thread(target=self.parallel_update_helper, args=(c,detection_lists[c],global_t))
-            threads.append(thread_c)
-            thread_c.start()
+            if c not in self.observation_cache.keys(): 
+                self.observation_cache[c] = [global_t]
+            else:
+                self.observation_cache[c].append(global_t)
+
+        #Update observed cliques 
+        t0 = time.time() 
+        threads = []
+        
+        for c in observed_cliques:
+            reinitted_c = None 
+            if c not in detection_lists.keys(): 
+                orig_c = c 
+                #print("detection_lists.keys():",detection_lists.keys())
+                #print("this is c: ",c)
+                for i in self.all_data_associations.keys(): 
+                    #print("trying to find reinitted id ... this is exp: {}".format(i))
+                    reinitted_c = get_reinitted_id(self.all_data_associations,self.current_exp,orig_c,optional_exp=i) 
+                    #print("reinitted_id: ",c)
+                    if reinitted_c in detection_lists.keys():
+                        #print("breaking ...")
+                        break 
+
+            if reinitted_c is not None: 
+                detection_lists[c] = detection_lists[reinitted_c]
+
+            if c not in self.tracked_cliques.keys():
+                orig_c = c 
+                #print("this is c: ",c)
+                #print("self.tracked_cliques.keys(): ",self.tracked_cliques.keys())
+                valid_id = False 
+                reinitted_c = get_reinitted_id(self.all_data_associations,self.current_exp,orig_c,optional_exp=self.current_exp)
+                orig_c = get_reinitted_id(self.all_data_associations,self.current_exp,orig_c)  
+                if reinitted_c not in self.tracked_cliques.keys() and orig_c not in self.tracked_cliques.keys():  
+                    for i in self.all_data_associations.keys(): 
+                        reinitted_c = get_reinitted_id(self.all_data_associations,self.current_exp,orig_c,optional_exp=i) 
+                        if reinitted_c in self.tracked_cliques.keys():
+                            valid_id = True 
+                            break
+
+                if not valid_id: 
+                    #print("id is invalid!")
+                    n_obsd_feat_ids = get_n_clique_feats(self.clique_features,c,self.max_feats,self.min_feats) 
+                    init_time = get_init_time(self.results_dir,self.n_experiments,self.current_exp,self.sim_length,c,self.isCarla) 
+                    self.tracked_cliques[orig_c] = PersistenceFilter(self.lambda_u,num_features=n_obsd_feat_ids,initialization_time=init_time)  
+                    c = orig_c; 
+
+                    if orig_c not in self.posteriors.keys():
+                        self.posteriors[orig_c] = np.zeros((self.sim_length*self.n_experiments,))
+                        self.growth_state_estimates[orig_c] = np.zeros((self.sim_length*self.n_experiments,))  
+                else: 
+                    if reinitted_c in self.tracked_cliques.keys(): 
+                        c = reinitted_c     
+
+            if c not in self.tracked_cliques.keys():
+                raise OSError 
+            
+            thread_c = None 
+            if c not in detection_lists.keys():
+                #print("This is c: ",c)
+                #print("detection_lists.keys():",detection_lists.keys())
+                for i in self.all_data_associations.keys(): 
+                    reinitted_c = get_reinitted_id(self.all_data_associations,self.current_exp,orig_c,optional_exp=i) 
+                    #print("reinitted_id: ",reinitted_c)
+                    if reinitted_c in detection_lists.keys():
+                        thread_c = threading.Thread(target=self.parallel_update_helper,args=(c,detection_lists[reinitted_c],global_t))
+                        break 
+            else: 
+                thread_c = threading.Thread(target=self.parallel_update_helper, args=(c,detection_lists[c],global_t))
+
+            if thread_c is not None: 
+                #print("adding thread!")
+                threads.append(thread_c)
+                thread_c.start()
 
         # Wait for all threads to complete
         for thread in threads:
             thread.join()
+        self.update_times.append(time.time() - t0)
 
+        t0 = time.time() 
         #predict clique likelihoods
         for c in self.tracked_cliques.keys():
             if c not in self.posteriors.keys():
                 #print("adding new posterior key: ",c)
                 self.posteriors[c] = np.zeros((self.sim_length*self.n_experiments,))
-            #print("predicting clique likelihood of clique {}".format(c))
-            posterior_c = self.tracked_cliques[c].predict_clique_likelihood(t)
+            posterior_c = self.tracked_cliques[c].predict_clique_likelihood(global_t)
             if np.isnan(posterior_c):
                 print("clique likelihood is nan: ",)
                 raise OSError 
             self.posteriors[c][global_t] = posterior_c
             #print("the posterior of clique {} is {}".format(c,self.posteriors[c][global_t]))
+        self.prediction_times.append(time.time() - t0)
 
         #normalize posteriors 
-        posteriors_t = [self.posteriors[c][global_t] for c in self.posteriors.keys()]
-        #print("this is posteriors_t before normalization:",posteriors_t)
+        posteriors_t = [self.posteriors[c][global_t] for c in self.posteriors.keys()] #len (self.posteriors.keys())
+        
+        t0 = time.time()
         if len([x for x in posteriors_t if x > 1]):
+            #print("this is posteriors_t before normalization:",posteriors_t)
             normalized_posteriors = self.normalize(global_t)
+            if len(normalized_posteriors) != len(self.posteriors.keys()): 
+                raise OSError 
             if np.isnan(normalized_posteriors).any():
                 raise OSError 
             posteriors_t = normalized_posteriors 
-            #print("this is posteriors_t after normalization: ",posteriors_t)
-
+        
+        if self.verbose:
+            print("There are {} posteriors".format(len(self.posteriors.keys())))
+        
+        reinit_ids = []
         for i,c in enumerate(self.posteriors.keys()):
+            #print("len(posteriors_t):",len(posteriors_t))
             self.posteriors[c][global_t] = posteriors_t[i]
             if c in observed_cliques and self.posteriors[c][global_t] < 0.1:  
                 print("this is c:{} and the posterior: {}".format(c,self.posteriors[c][global_t]))
                 print("WHY IS THIS POSTERIOR SO LOW LOW EVEN THOUGH THE CLIQUE IS BEING OBSERVED?")
-            
-        persistent_obs = [x for x in detections_t if self.posteriors[x['clique_id']][global_t] > self.acceptance_threshold] 
-    
-        #do growth state estimation 
-        non_persistent_cliques = np.unique([x["clique_id"] for x in detections_t if self.posteriors[x["clique_id"]][global_t] <= self.rejection_threshold])  
+                reinit_ids.append(c) 
+                
+        persistent_obs = []
+        non_persistent_cliques = []
+        for x in detections_t: 
+            if x['clique_id'] in self.posteriors.keys():
+                if self.posteriors[x['clique_id']][global_t] > self.acceptance_threshold: 
+                    persistent_obs.append(x) 
+                if self.posteriors[x['clique_id']][global_t] < self.rejection_threshold: 
+                    if x['clique_id'] not in non_persistent_cliques:
+                        non_persistent_cliques.append(x['clique_id'])
+            else:
+                #get_reinitted_id(self.all_data_associations,self.current_exp,x['clique_id']) == c])
+                for i in self.all_data_associations.keys(): 
+                    reinitted_id = get_reinitted_id(self.all_data_associations,self.current_exp,x['clique_id'],optional_exp=i)  
+                    if reinitted_id in self.posteriors.keys(): 
+                        if self.posteriors[reinitted_id][global_t] > self.acceptance_threshold: 
+                            persistent_obs.append(x) 
+                        if self.posteriors[reinitted_id][global_t] < self.rejection_threshold:
+                            if reinitted_id not in non_persistent_cliques:
+                                non_persistent_cliques.append(reinitted_id) 
+                        break 
+                    '''
+                    else:
+                        print("reinitted_id: ",reinitted_id)
+                        print("x: ",x)
+                        print("self.posteriors.keys(): ",self.posteriors.keys())
+                        raise OSError 
+                    '''
+
+        #print("these are the non persistent cliques:",non_persistent_cliques)
         for c in non_persistent_cliques: 
+            if c not in self.growth_state_estimates.keys(): 
+                reinitted_id = get_reinitted_id(self.all_data_associations,self.current_exp,c)
+                if reinitted_id not in self.growth_state_estimates.keys():
+                    raise OSError 
+                else:
+                    c = reinitted_id 
             #print("clique c: {} posterior is below the rejection threshold!".format(c))
             self.growth_state_estimates[c][global_t] = 0
 
-        #persisting_cliques = np.unique([x["clique_id"] for x in detections_t if self.posteriors[x["clique_id"]][global_t] > self.rejection_threshold])  
-
+        #print("this is non persistent cliques: ",non_persistent_cliques)
+        current_gstate_estimates = []
         for c in self.posteriors.keys():
-            estimated_gstate = self.estimate_growth_state(t,c,detections_t,self.posteriors[c][global_t])
-            '''
-            if estimated_gstate == 0:
-                print("WARNING: GSTATE ESTIMATION EXPECTS THIS CLIQUE TO NOT PERSIST")
-            '''
+            if c in non_persistent_cliques:
+                #print("c: {} is in non persistent cliques".format(c))
+                continue 
+            if c not in self.growth_state_estimates.keys():
+                for i in self.all_data_associations.keys():
+                    reinit_id = get_reinitted_id(self.all_data_associations,self.current_exp,c,optional_exp=i) 
+                    if reinit_id in self.growth_state_estimates.keys():
+                        c = reinit_id 
+                        break 
+                if c not in self.growth_state_estimates.keys():
+                    self.growth_state_estimates[c] = np.zeros((self.sim_length*self.n_experiments,))
+                    self.new_exp_ids.append(c)
+
+            #print("self.start_exp: {},self.current_exp: {}, self.start_tstep: {}".format(self.start_exp,self.current_exp,self.start_tstep))
+            if c in self.new_exp_ids: 
+                estimated_gstate = self.sample_gstate(c)
+            else:
+                if self.start_exp is not None: 
+                    if self.start_exp == self.current_exp and self.start_tstep == t: 
+                        if c in self.cone_ids: 
+                            d_t,_= self.get_prev_gstates_id(c,t)
+                            estimated_gstate = self.sample_gstate(c,x=d_t/self.sim_length)  
+                        else:
+                            estimated_gstate = self.sample_gstate(c)
+                    else: 
+                        #print("estimating growth state...")
+                        #print("t: {}, c: {}".format(t,c)) 
+                        estimated_gstate = self.estimate_growth_state(t,c,detections_t,self.posteriors[c][global_t]) 
+                else:
+                    #print("estimating growth state...")
+                    estimated_gstate = self.estimate_growth_state(t,c,detections_t,self.posteriors[c][global_t])
+
+            if self.posteriors[c][global_t] > self.rejection_threshold and estimated_gstate == 0:
+                if c in self.cone_ids: 
+                    d_t,_= self.get_prev_gstates_id(c,t)
+                    estimated_gstate = self.sample_gstate(c,x=d_t/self.sim_length)  
+                else:
+                    estimated_gstate = self.sample_gstate(c)
+                
+            current_gstate_estimates.append(estimated_gstate)
+
             if estimated_gstate > 1 and global_t < 10:
                 print("growth state estimation is out of control")
                 raise OSError 
-            self.growth_state_estimates[c][global_t] = estimated_gstate
+            
+            self.growth_state_estimates[c][global_t] = estimated_gstate 
 
-        if self.tune_bool: 
-            persistent_obs = []
-            for c in self.growth_state_estimates.keys(): 
-                if self.growth_state_estimates[c][global_t] != 0: 
-                    persistent_obs.extend([x for x in detections_t if get_reinitted_id(self.all_data_associations,self.current_exp,x['clique_id']) == c])
+        #print("current_gstate_estimates: ",current_gstate_estimates)
+        if np.all(current_gstate_estimates == 0): 
+            print("current_gstate_estimates: ",current_gstate_estimates)
+            print("something is wrong! all landmarks are dead?")
+            raise OSError 
+        
+        self.check_times.append(time.time() - t0)
 
-        return persistent_obs
+        t0 = time.time()        
+
+        persistent_obs = []
+        for c in self.growth_state_estimates.keys(): 
+            if self.growth_state_estimates[c][global_t] != 0: 
+                persistent_obs.extend([x for x in detections_t if get_reinitted_id(self.all_data_associations,self.current_exp,x['clique_id']) == c])
+
+        self.gstate_estimate_times.append(time.time() - t0)
+
+        return persistent_obs, reinit_ids 
 
     def last_index_of_change(self,id_,t,prev_gstates_id):
         global_t = self.current_exp * self.sim_length + t 
+
         #print("Trying to find out how long this clique has been in this clique state")
         if t > 0:
             if id_ not in self.growth_state_estimates.keys(): 
-                reinit_id = get_reinitted_id(self.all_data_associations,self.current_exp,id_,optional_exp=0)
-                if reinit_id not in self.growth_state_estimates.keys():
-                    reinit_id = get_reinitted_id(self.all_data_associations,self.current_exp,id_,optional_exp=self.current_exp)
-                    if reinit_id not in self.growth_state_estimates.keys():
-                        raise OSError 
-                id_ = reinit_id 
-
+                for i in self.all_data_associations.keys():
+                    reinit_id = get_reinitted_id(self.all_data_associations,self.current_exp,id_,optional_exp=i)
+                    if reinit_id in self.growth_state_estimates.keys():
+                        id_ = reinit_id 
+                        break 
+            
+            if id_ not in self.growth_state_estimates.keys():
+                self.growth_state_estimates[id_] = np.zeros((self.sim_length*self.n_experiments,)) 
+                return global_t 
+            
             current_gstate = self.growth_state_estimates[id_][t-1]
         else:
             current_gstate = 1 
@@ -312,16 +651,11 @@ class clique_simulator():
         
         if not id_ in self.cone_ids and id_ not in self.tree_ids: 
             orig_id = id_ 
-            id_ = get_reinitted_id(self.all_data_associations,self.current_exp,id_,optional_exp=self.current_exp) 
-            if not id_ in self.cone_ids and id_ not in self.tree_ids:  
-                print("self.all_data_associations: ",self.all_data_associations)
-                print("self.current_exp:",self.current_exp)
-                print("orig_id: ",orig_id) 
-                print("id_: ",id_) 
-                print("self.cone_ids: ",self.cone_ids)
-                print("self.tree_ids: ",self.tree_ids)
-                raise OSError 
-            
+            for i in self.all_data_associations.keys(): 
+                id_ = get_reinitted_id(self.all_data_associations,self.current_exp,orig_id,optional_exp=i) 
+                if id_ in self.cone_ids or id_ in self.tree_ids: 
+                    break 
+
         if id_ in self.cone_ids:
             if current_gstate == 1:
                 prev_gstate = 0 
@@ -334,53 +668,85 @@ class clique_simulator():
             current_idx = np.where(np.arange(self.n_gstates) == current_gstate)
             prev_gstate = np.arange(self.n_gstates)[int(current_idx[0]) - 1] + 1 
         else:
-            raise OSError 
-        
+            current_gstate = 0
+            prev_gstate = None 
+            for i in range(len(prev_gstates_id) - 1, -1, -1):
+                if prev_gstates_id[i] != 0:
+                    prev_gstate = prev_gstates_id[i]
+                    break 
+            if prev_gstate is None: 
+                prev_gstate = 1 #idk anymore 
+
         #print("this is prev_gstate: ",prev_gstate)
         if prev_gstate in prev_gstates_id: 
             for i in range(len(prev_gstates_id) - 1, -1, -1):
+                #print("prev_gstates_id: ",prev_gstates_id[i]) 
+                #print("prev_gstate:",prev_gstate)
                 if prev_gstates_id[i] == prev_gstate:
-                    #print("This is i: ",i)
                     if i > global_t:
                         raise OSError 
                     return i
         else: 
-            return 0  # Return 0 if the value is not found
+            if 0 < self.current_exp*self.sim_length:
+                return self.current_exp*self.sim_length
+            else:
+                return 0  
 
-    def estimate_growth_state(self,t,id_,detections_t,posterior): 
-        #print("estimating growth state of clique {}....".format(id_))
-        #need to get time in the current growth state, then compare to T_nu_lmType  
-
-        global_t = self.current_exp*self.sim_length + t 
-
-        if not id_ in self.tree_ids and id_ not in self.cone_ids: 
-            orig_id = id_ 
-            id_ = get_reinitted_id(self.all_data_associations,self.current_exp,id_,self.current_exp) 
+    def get_prev_gstates_id(self,id_,t): 
+        if id_ is None:
+            raise OSError 
         
-        if id_ in self.cone_ids:
-            T_nu = self.T_nu_cone  
-        elif id_ in self.tree_ids: 
-            T_nu = self.T_nu_tree  
-            
+        global_t = (self.current_exp*self.sim_length) + t 
+
+        orig_id = get_reinitted_id(self.all_data_associations,self.current_exp,id_,optional_exp=0) 
+
         if global_t == 0:
             prev_gstates_id = []
             d_t = 0 
         else:
             if id_ in self.growth_state_estimates.keys():
                 prev_gstates_id = self.growth_state_estimates[id_][:global_t]
+                if self.last_index_of_change(id_,t,prev_gstates_id) > global_t:
+                    print("self.last_index_of_change: {}, global_t: {}".format(self.last_index_of_change(id_,t,prev_gstates_id),global_t))
+                    print("this isnt possible")
+                    raise OSError 
+                #print("self.current_exp*self.sim_length: {}, self.last_index_of_change: {}".format((self.current_exp)*self.sim_length, self.last_index_of_change(id_,t,prev_gstates_id)))
+                d_t = global_t - self.last_index_of_change(id_,t,prev_gstates_id)
             elif orig_id in self.growth_state_estimates.keys():  
                 prev_gstates_id = self.growth_state_estimates[orig_id][:global_t]
+                if self.last_index_of_change(orig_id,t,prev_gstates_id) > global_t:
+                    print("self.last_index_of_change: {}, global_t: {}".format(self.last_index_of_change(orig_id,t,prev_gstates_id),global_t))
+                    print("this isnt possible")
+                    raise OSError 
+                #print("self.current_exp*self.sim_length: {}, self.last_index_of_change: {}".format((self.current_exp)*self.sim_length, self.last_index_of_change(id_,t,prev_gstates_id)))
+                d_t = global_t - self.last_index_of_change(id_,t,prev_gstates_id)
             else:
                 print("orig_id: {}, id_:{}".format(orig_id,id_))
                 print("self.growth_state_estimates.keys():",self.growth_state_estimates.keys())
-                raise OSError 
-            if self.last_index_of_change(id_,t,prev_gstates_id) > global_t:
-                print("self.last_index_of_change: {}, global_t: {}".format(self.last_index_of_change(id_,t,prev_gstates_id),global_t))
-                print("this isnt possible")
-                raise OSError 
-            #print("self.current_exp*self.sim_length: {}, self.last_index_of_change: {}".format((self.current_exp)*self.sim_length, self.last_index_of_change(id_,t,prev_gstates_id)))
-            d_t = global_t - self.last_index_of_change(id_,t,prev_gstates_id)
-    
+                raise OSError  
+            
+        return d_t, prev_gstates_id
+            
+    def estimate_growth_state(self,t,id_,detections_t,posterior): 
+        if id_ is None:
+            raise OSError 
+        
+        global_t = self.current_exp*self.sim_length + t 
+
+        if not id_ in self.tree_ids and id_ not in self.cone_ids: 
+            print("self.tree_ids: {}, self.cone_ids: {}".format(self.tree_ids,self.cone_ids))
+            orig_id = id_ 
+            print("orig_id: ",orig_id)
+            id_ = get_reinitted_id(self.all_data_associations,self.current_exp,id_,self.current_exp) 
+            print("id_ was not in either cone or tree ids... this is reinitted id: ",id_)
+
+        if id_ in self.cone_ids:
+            T_nu = self.T_nu_cone  
+        elif id_ in self.tree_ids: 
+            T_nu = self.T_nu_tree  
+            
+        d_t,_ = self.get_prev_gstates_id(id_,t)
+
         #print("this is d_t: ",d_t)
         if d_t < 0 or d_t > global_t: 
             print("this is d_t: {}, and this is global_t: {}".format(d_t,global_t)) 
@@ -393,10 +759,12 @@ class clique_simulator():
                 current_gstate = self.growth_state_estimates[id_][global_t-1]
         else:
             current_gstate = 1 
+        #print("current_gstate: ",current_gstate)
 
         if id_ in self.tree_ids:
             if current_gstate == 0 and posterior > self.acceptance_threshold:
                 #print("woops we thought this was dead... we probably missed up bc the posterior is really high") 
+                #print("this is gstate: ",self.sample_gstate(id_))
                 return self.sample_gstate(id_) 
             elif current_gstate == 0 and posterior < self.acceptance_threshold: 
                 #print("nah this is prolly dead fr")
@@ -419,16 +787,12 @@ class clique_simulator():
             else:
                 next_gstate = 0
         else:
-            # c = get_reinitted_id(self.all_data_associations,self.current_exp,c) 
-            reinit_id = get_reinitted_id(self.all_data_associations,self.current_exp,id_,self.current_exp)
-            print("this is neither a tree or a cone:",id_)
-            print("this is reinit_id: ",reinit_id)
-            print("self.cone_ids: ",self.cone_ids)
-            print("self.tree_ids: ",self.tree_ids)
-            raise OSError 
-        
-        #print("this is current gstate: ",current_gstate)
-        #print("this is next gstate: ",next_gstate)
+            current_gstate = 0
+            return current_gstate
+
+        if self.verbose:         
+            print("this is current gstate: ",current_gstate)
+            print("this is next gstate: ",next_gstate)
 
         if global_t < 100 and current_gstate > 1:
             print(self.growth_state_estimates[id_])
@@ -444,6 +808,7 @@ class clique_simulator():
         elif current_gstate not in self.tree_feature_description_cache.keys() and id_ in self.tree_ids:  
             self.tree_feature_description_cache[current_gstate] = []
 
+        #print("determining feature similarity ... ")
         if id_ in self.cone_ids: 
             if isinstance(self.cone_feature_description_cache[current_gstate],list): 
                  self.cone_feature_description_cache[current_gstate] = np.array(self.cone_feature_description_cache[current_gstate])
@@ -461,21 +826,24 @@ class clique_simulator():
         else:
             raise OSError 
         
-        #Note: LOWER feature_similarity value implies 
-        #print("this is feature_similarity: ",feature_similarity)
-        #print("this is d_t: {} and T_nu: {}".format(d_t,T_nu))
+        if self.verbose: 
+            print("feature similarity: ",feature_similarity)
 
         if d_t <= T_nu: 
             if d_t < T_nu*.05:
+                if self.verbose: 
+                    print("d_t is much less than T_nu")
                 #this is rachet ngl
                 return current_gstate
             #print("the time for this growth state has not yet been exceeded")
             if self.hamming_similarity_val < feature_similarity: 
-                #print("self.hamming_similarity_val:",self.hamming_similarity_val)
-                #print("these features are different ... theres probably been a state change") 
+                if self.verbose: 
+                    print("self.hamming_similarity_val:",self.hamming_similarity_val)
+                    print("these features are different ... theres probably been a state change") 
                 return next_gstate 
             else: 
-                # the feature similarity is high
+                if self.verbose: 
+                    print("the feature similarity is high!") 
                 if feature_similarity < self.hamming_similarity_val * (1-self.growth_state_relevancy_level): 
                     #print("these are very similar, adding these descriptors!")
                     if id_ in self.cone_ids: 
@@ -497,15 +865,15 @@ class clique_simulator():
                         sampled_gstate = self.sample_gstate(id_,x=d_t/self.sim_length)
                     else:
                         sampled_gstate = self.sample_gstate(id_)
-                    '''
                     if sampled_gstate == 0:
-                        print("WARNING! sampling function thinks this clique should not persist!") 
-                    '''
+                        if self.verbose: 
+                            print("WARNING! sampling function thinks this clique should not persist!") 
                     return sampled_gstate 
         else:       
-            #print("the time in this growth state has been exceeded!") 
+            if self.verbose: 
+                print("the time in this growth state has been exceeded!") 
             if self.hamming_similarity_val < feature_similarity:
-                #however the features are quite different 
+                #print("...however the features are quite different")
                 if id_ in self.cone_ids: 
                     self.exceeded_Tnu_cone_tsteps += 1 
                     if 10 < self.exceeded_Tnu_cone_tsteps:
@@ -518,7 +886,8 @@ class clique_simulator():
                         self.exceeded_Tnu_tree_tsteps = 0 
                 return next_gstate
             else: 
-                #print("the features are quite similar ...") 
+                if self.verbose: 
+                    print("the features are quite similar ...") 
                 #increase the mean of the distribution for this clique state 
                 if id_ in self.cone_ids: 
                     self.T_nu_cone += self.T_nu_cone*0.05
@@ -527,7 +896,6 @@ class clique_simulator():
                 return current_gstate
             
     def sample_gstate(self,id_,x=None): 
-        #print("sampling gstate...")
         if id_ in self.cone_ids: 
             return cone_gstate_function(x)
         else:
@@ -541,21 +909,17 @@ class clique_simulator():
             if "feature_des" in obs.keys(): 
                 feature_descriptor = obs["feature_des"]
             else:
-                '''
-                if not already_printed:
-                    print("WARNING THERE IS NO FEATURE DESCRIPTOR: THIS IS THE MADE UP DATASET")
-                    already_printed = True 
-                '''
+                if self.isCarla:
+                    print("obs: ",obs)
+                    raise OSError
                 feature_descriptor = np.random.randint(0, 256, (32,), dtype=np.uint8) 
             current_feature_descriptors.append(feature_descriptor)
         current_feature_descriptors = np.array(current_feature_descriptors)
         return current_feature_descriptors 
     
     def determine_similarity(self,gstate_feature_descriptions,current_feature_descriptors): 
-        #print("gstate_feature_descriptions.size:",gstate_feature_descriptions.size)
-        #print("current_feature_descriptors.size:",current_feature_descriptors.size)
         if gstate_feature_descriptions.size > 0 and current_feature_descriptors.size > 0:
-            hamming_ds = compute_hamming_distances(gstate_feature_descriptions,current_feature_descriptors)
+            hamming_ds = compute_hamming_distances(gstate_feature_descriptions.astype(int),current_feature_descriptors.astype(int))
             min_values = np.min(hamming_ds, axis=1); 
             similarity_val = np.mean(min_values)
         else: 

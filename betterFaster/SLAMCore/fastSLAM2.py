@@ -1,150 +1,157 @@
-import numpy as np
-import scipy  
-import os
-import threading 
-from .ekf_filter_utils import *
-
-class ekf_filter(): 
-	def __init__(self,mu,sigma,Hfun,hfun,Qt): 
-		self.mu = mu
-		self.Sigma = sigma 
-		self.Hfun = Hfun
-		self.hfun = hfun
-		self.p = 0
-		self.Qt =  Qt
-		self.debug_count = 0
-		self.feature_cache = {}  
-
-	def update(self,z,x):
-		#print("entering EKF update...")
-		#init_mu = [x for x in self.mu]
-		#print("this is mu: ",self.mu)
-		#print("this is the pose: ",x)
-		zhat = self.hfun(self.mu[0],self.mu[1],x)
-		H = self.Hfun(self.mu[0],self.mu[1],x,zhat)
-		Q = H @ self.Sigma @ H.T + self.Qt
-		K = self.Sigma @ H.T @ np.linalg.inv(Q)
-		v = z - zhat #innovation
-		self.mu += K @ v 
-		self.Sigma = (np.identity(2) - K @ H) @ self.Sigma 
-		#print("in EKF update.. this is z: {}, zhat: {}, Q: {}".format(z,zhat,Q))
-		self.p = norm_pdf_multivariate(z,zhat,Q)
+import numpy as np 
+import concurrent.futures  
 
 class fast_slam_landmark(): 
-	def __init__(self,observed,mu,sigma,Hfun,hfun,Qt,lm_id):
-		self.EKF =  ekf_filter(mu,sigma,Hfun,hfun,Qt)
-		self.isobserved = observed
+	def __init__(self,lm_id,mu,sigma):
+		self.isobserved = False
 		self.lm_id = lm_id 
+		self.mu = mu 
+		self.sigma = sigma 
 
-class fast_slam_particle():
-	def __init__(self,mu,sigma,n,landmark_ids,Hfun,hfun,Qt): 
-		num_landmarks = len(landmark_ids)
-		if len(mu) != 3:
-			raise OSError 
-		#print("mu: {}, sigma: {}".format(mu,sigma))
-		self.pose = np.random.multivariate_normal(mu,sigma)
-		if len(self.pose) != 3:
-			#print("self.pose: ",self.pose)
-			raise OSError
-		self.weight = 1/n 
-		self.landmark = []
-		for l in range(num_landmarks):
-			lm_id = int(landmark_ids[l])
-			lm = fast_slam_landmark(False,np.zeros((2,1)),np.zeros((2,2)),Hfun,hfun,Qt,lm_id)  
-			self.landmark.append(lm)
+class fast_slam_particle(): 
+	def __init__(self,pose,weight,lm_ids): 
+		self.pose = pose 
+		self.weight = weight 
+		self.landmarks = []
+		for id_ in lm_ids:
+			mu = np.zeros((2,)); sigma = np.zeros((2,2)) 
+			self.landmarks.append(fast_slam_landmark(id_,mu,sigma)) 
 
 class fastSLAM2():
-	#n_particles,localization_covariance,observed_clique_ids
-	def __init__(self,n_particles,gt_init_state,init_state_covar,lm_ids,gt_lms):
+	def __init__(self,init_pose,localization_covariance,n_particles,lm_ids,Q_params):  
+		self.localization_covariance = localization_covariance 
 		self.n = n_particles 
-		self.Sigma = init_state_covar
-		self.mu = np.random.multivariate_normal(gt_init_state,self.Sigma)
-		betas    = [1.25, 2, 0.175]
-		self.Qt = np.dot(betas[0],np.array([[betas[1]**2,np.random.rand()],[np.random.rand(),betas[2]**2]]))
-		#initializing the particles
-		self.particles = [fast_slam_particle(self.mu,self.Sigma,self.n,lm_ids,self.Hfun,self.hfun,self.Qt) for x in range(self.n)] 
-		self.gt_lms = gt_lms 
+		self.particles = [fast_slam_particle(init_pose,0,lm_ids) for _ in range(n_particles)]
+		self.Q = np.diagflat(np.array([Q_params[0], Q_params[1]])) ** 2
 
-	def hfun(self,lm_x,lm_y,x):
-		return np.array([np.sqrt((lm_y-x[1])**2 + (lm_x-x[0])**2),np.arctan2(self.mu[1] - x[1],self.mu[0] - x[0])-x[2]])
-	
-	def Hfun(self,lm_x,lm_y,x,z_hat):
-		return np.array([[(lm_x - x[0])/z_hat[0], (lm_y-x[1])/z_hat[0]],[(x[1] - lm_y)/z_hat[0]**2, (lm_x-x[0])/z_hat[0]**2]])
-	
-	def h_inv(self,z,x):
-		return np.array([x[0] + z[0]*np.cos(x[2]+z[1]),x[1]+z[0]*np.sin(x[2]+z[1])])
+	def parallel_prediction_helper(self,k,pose):
+		self.particles[k].pose = np.random.multivariate_normal(pose,self.localization_covariance) 
 
-	def prediction(self,pose):
-		for k in range(self.n):
-			self.particles[k].pose = np.random.multivariate_normal(pose,self.Sigma)
-		best_idx = np.argmax([self.particles[k].weight for k in range(self.n)])
-		self.particles[best_idx].pose[2] = np.deg2rad(self.particles[best_idx].pose[2])
-		return self.particles[best_idx].pose
+	def prediction(self,pose): 
+		with concurrent.futures.ThreadPoolExecutor() as executor:
+			executor.map(lambda k: self.parallel_prediction_helper(k,pose), range(self.n))
+		particle_weights = [x.weight for x in self.particles] 
+		best_particle_idx = np.argmax(particle_weights)
+		return self.particles[best_particle_idx].pose 
+
+	def compute_expected_landmark_state(self,particle_idx,measurement):
+		robot_x = self.particles[particle_idx].pose[0] 
+		robot_y = self.particles[particle_idx].pose[1] 
+		robot_heading = self.particles[particle_idx].pose[2]
+		x = robot_x + measurement[0] + np.cos(measurement[1] + robot_heading) 
+		y = robot_y + measurement[0] + np.sin(measurement[1] + robot_heading) 
+		return [x,y] 
+
+	def compute_landmark_jacobian(self,particle_idx,lm_idx): 
+		delta_x = self.particles[particle_idx].landmarks[lm_idx].mu[0] - self.particles[particle_idx].pose[0] 		
+		delta_y = self.particles[particle_idx].landmarks[lm_idx].mu[1] - self.particles[particle_idx].pose[1] 
+		q = delta_x**2 + delta_y**2 
+		H_1 = np.array([delta_x/np.sqrt(q), delta_y/np.sqrt(q)])
+		H_2 = np.array([-delta_y/q, delta_x/q])
+		H_m = np.array([H_1, H_2])
+		return H_m
 	
-	def parallel_correction_helper(self,z,k): 
-		if not "None" in str(type(z)):
-			for j in range(len(z)):
-				#original_observation = [z[j]['range'], z[j]['bearing']]
-				z_t = [z[j]['range'], z[j]['bearing']*(np.pi/180)]
-				idx = np.where(self.gt_lms[:,0] == z[j]["clique_id"]) 
-				if not np.isnan(z[j]['bearing']) and not np.isnan(z[j]['range']):
-					id_ = z[j]['clique_id']
-					if id_ in [x.lm_id for x in self.particles[k].landmark]:
-						idx_lm = [i for i,x in enumerate(self.particles[k].landmark) if x.lm_id == id_][0]
-						if not self.particles[k].landmark[idx_lm].isobserved:
-							mean_init = self.h_inv(z_t,self.particles[k].pose)
-							#mean_init = self.h_inv(z_t,tmp_pose)
-							H = self.Hfun(mean_init[0],mean_init[1],self.particles[k].pose,z_t)
-							#H = self.Hfun(mean_init[0],mean_init[1],tmp_pose,z_t)
-							H_inv = np.identity(2) / H 
-							cov_init = H_inv @ self.Qt @ H_inv.T
-							self.particles[k].landmark[idx_lm].EKF.mu = mean_init
-							self.particles[k].landmark[idx_lm].EKF.Sigma = cov_init
-							self.particles[k].landmark[idx_lm].isobserved = True
-						else:
-							#print("this is the argument to EKF update: ",z_t)
-							if z_t[1] > np.pi*2:
-								raise OSError
-							self.particles[k].landmark[idx_lm].EKF.update(z_t,self.particles[k].pose) 
-							#self.particles[k].landmark[idx_lm].EKF.update(z_t,tmp_pose) 
-							self.particles[k].weight = self.particles[k].weight * self.particles[k].landmark[idx_lm].EKF.p
-		else:
-			raise OSError 
+	def initialize_landmark(self,particle_idx,lm_idx,measurement): 
+		#compute expected landmark state 
+		self.particles[particle_idx].landmarks[lm_idx].mu = self.compute_expected_landmark_state(particle_idx,measurement)
+ 		#compute Jacobian 
+		H_m = self.compute_landmark_jacobian(particle_idx,lm_idx) 
+		#update landmark covariance
+		H_inverse = np.linalg.inv(H_m) 
+		self.particles[particle_idx].landmarks[lm_idx].sigma = H_inverse.dot(self.Q).dot(H_inverse.T) 
+		#mark landmark as observed 
+		self.particles[particle_idx].landmarks[lm_idx].isobserved = True 
+		#update weight 
+		self.particles[particle_idx].weight = 1/self.n 
+
+	def compute_expected_measurement(self,particle_idx,lm_idx): 
+		delta_x = self.particles[particle_idx].landmarks[lm_idx].mu[0] - self.particles[particle_idx].pose[0] 
+		delta_y = self.particles[particle_idx].landmarks[lm_idx].mu[1] - self.particles[particle_idx].pose[1] 
+
+		q = delta_x ** 2 + delta_y ** 2
+
+		range = np.sqrt(q)
+		bearing = np.arctan2(delta_y, delta_x) - self.particles[particle_idx].pose[2] 
+
+		return range, bearing
+
+	def landmark_update(self,particle_idx,lm_idx,measurement):
+		# Compute expected measurement
+		range_expected, bearing_expected =\
+			self.compute_expected_measurement(particle_idx, lm_idx)
+
+		# Get Jacobian wrt landmark state
+		H_m = self.compute_landmark_jacobian(particle_idx, lm_idx)
+
+		# Compute Kalman gain
+		Q = H_m.dot(self.particles[particle_idx].landmarks[lm_idx].sigma).dot(H_m.T) + self.Q
+		#K = self.particles[particle_idx].landmarks[lm_idx].sigma.dot(H_m.T).dot(np.linalg.inv(Q))
+		K = self.particles[particle_idx].landmarks[lm_idx].sigma.dot(H_m.T).dot(np.linalg.inv(Q)) 
+
+		# Update mean
+		difference = np.array([[measurement[0] - range_expected],
+								[measurement[1] - bearing_expected]])
+		innovation = K.dot(difference)
+		self.particles[particle_idx].landmarks[lm_idx].mu += innovation.T[0]
+
+		# Update covariance
+		self.particles[particle_idx].landmarks[lm_idx].sigma =\
+			(np.identity(2) - K.dot(H_m)).dot(self.particles[particle_idx].landmarks[lm_idx].sigma)
+
+		# Importance factor
+		self.particles[particle_idx].weight = np.linalg.det(2 * np.pi * Q) ** (-0.5) *\
+			np.exp(-0.5 * difference.T.dot(np.linalg.inv(Q)).
+					dot(difference))[0, 0]
 		
-	def correction(self,t,z):
-		threads = []
+	def normalize_weights(self):  
+		sum = 0 
+		for particle in self.particles: 
+			sum += particle.weight 
+	
+		#sum = np.cumsum([p.weight for p in self.particles]) 
+			
+		# If sum is too small, equally assign weights to all particles
+		if sum < 1e-10:
+			for particle in self.particles:
+				particle.weight = 1.0 / self.n
+			return
+
+		for particle in self.particles:
+			particle.weight /= sum
+
+	def correction(self,z): 
 		for k in range(self.n): 
-			thread_k = threading.Thread(target=self.parallel_correction_helper,args=(z,k))
-			threads.append(thread_k)
-			thread_k.start() 
-		
-		for thread in threads:
-			thread.join()
+			for observation in z: 
+				obs_range = observation.get('range') 
+				obs_bearing = observation.get('bearing') 
+				obs_id = observation.get('clique_id') 
+				z_t = [obs_range,obs_bearing] 
+				#check if the landmark has been observed yet or not 
+				particle_landmarks = self.particles[k].landmarks 
+				print("[x.lm_id for x in particle_landmarks]: ", [x.lm_id for x in particle_landmarks])
+				print("observation: ",observation)  
+				for i,lm in enumerate(particle_landmarks):
+					if lm.lm_id == obs_id:
+						lm_idx = i 
+						break 
+				#lm_idx = next(i for i,lm in enumerate(self.particles[k].landmarks) if lm.lm_id == obs_id) 
+				if not self.particles[k].landmarks[lm_idx].isobserved:
+					#init the landmark 
+					self.initialize_landmark(k,lm_idx,z_t) 
+				else:
+					#update the landmark 
+					self.landmark_update(k,lm_idx,z_t)  
 
-		#Update weights 
-		weight_sum = np.sum([x.weight for x in self.particles])
+			#Normalize weights 
+			self.normalize_weights() 
+	
+	def reinit_EKFs(self,reinit_ids): 
 		for k in range(self.n): 
-			self.particles[k].weight = self.particles[k].weight/weight_sum 
-		weight_sum = np.sum([x.weight for x in self.particles])
-		neff = weight_sum**(-2) 
-		if neff < self.n /2: 
-			self.resample()
-
-	def resample(self):
-		W = np.cumsum([x.weight for x in self.particles])
-		r = np.random.rand()/self.n 
-		j = 1 
-		for i in range(self.n): 
-			u = r + (i-1)/self.n 
-			while u > W[j]: 
-				j += 1 
-			self.particles[i] = self.particles[j] 
-			self.particles[i].weight = 1/self.n 
-
-	def reinit_EKF(self,id_,detections_t,t,experiment):
-		for k in range(self.n):
-			idx_lm = [i for i,x in enumerate(self.particles[k].landmark) if x.lm_id==id_][0]
-			self.particles[k].landmark[idx_lm].isobserved = False 
-
-		if len(detections_t) >0:
-			self.correction(detections_t,t,experiment)
+			for id_ in reinit_ids:
+				idx = np.where([x.lm_id for x in self.particles[k].landmarks] == id_)[0][0]
+				print("lms: ",[x.lm_id for x in self.particles[k].landmarks] )
+				print("id_: ",id_) 
+				print("idx: ",idx) 
+				self.particles[k].landmarks[idx].mu = np.zeros((2,)) 
+				self.particles[k].landmarks[idx].sigma = np.zeros((2,2))  
+				self.particles[k].landmarks[idx].isobserved = False 

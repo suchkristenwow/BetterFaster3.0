@@ -1,43 +1,45 @@
-import numpy as np
-from scipy.spatial.distance import cdist
-import cv2 
+import os 
 import pickle 
+import matplotlib.pyplot as plt 
+import numpy as np 
 
-def compute_hamming_distances(descriptors1, descriptors2):
-    # Convert binary arrays to integers for Hamming distance calculation
-    d1 = np.packbits(descriptors1, axis=-1)
-    d2 = np.packbits(descriptors2, axis=-1)
-    
-    # Compute Hamming distances
-    hamming_distances = cdist(d1, d2, metric='hamming')
-    
-    # Since Hamming distance from cdist gives the fraction of differing bits,
-    # we multiply by the number of bits per descriptor to get actual bit differences
-    bit_length = descriptors1.shape[1] * 8  # 32 bytes * 8 bits
-    hamming_distances *= bit_length
-    
-    return hamming_distances
+#results_dir = "/media/kristen/easystore1/BetterFaster/kitti_carla_simulator/exp_results"  
+results_dir = "/home/kristen/BetterFaster3.1/betterFaster/sim_utils/fake_data/observation_pickles"
+n_observations = []
+for exp in range(10): 
+    n_observations_exp = []
+    #with open(os.path.join(results_dir,"reformed_carla_observations/exp"+str(exp)+"reformed_carla_observations.pickle"),"rb") as handle:
+    with open(os.path.join(results_dir,"exp"+str(exp)+"observed_cliques.pickle"),"rb") as handle:
+        exp_observations = pickle.load(handle)
+    for t in range(500): 
+        observations_t = exp_observations[t] 
+        n_observations.append(len(observations_t)) 
+        n_observations_exp.append(len(observations_t)) 
+    tmp = []
+    c = 0 
+    for count in n_observations: 
+        if count == 0:
+            c += 1  
+        else:
+            c = 0 
+        if c > 0: 
+            #print("c: ",c) 
+            tmp.append(c) 
+            
+    print("max(tmp): ",max(tmp)) 
 
-# Load the image
-image = cv2.imread('/home/kristen/Downloads/springTree1.jpeg', cv2.IMREAD_GRAYSCALE)
+tmp = []
+c = 0 
+for count in n_observations: 
+    if count == 0:
+        c += 1  
+    else:
+        c = 0 
+    if c > 0: 
+        #print("c: ",c) 
+        tmp.append(c) 
 
-# Initialize the ORB detector
-orb = cv2.ORB_create()
+print("max(tmp):",max(tmp)) 
 
-# Detect keypoints and compute descriptors
-_, descriptors_0 = orb.detectAndCompute(image, None)
-
-# Load the image
-image = cv2.imread('/home/kristen/Downloads/springTree2.jpeg', cv2.IMREAD_GRAYSCALE)
-
-# Initialize the ORB detector
-orb = cv2.ORB_create()
-
-# Detect keypoints and compute descriptors
-_, descriptors_1 = orb.detectAndCompute(image, None)
-
-hamming_ds = compute_hamming_distances(descriptors_0,descriptors_1)
-min_values = np.min(hamming_ds, axis=1); 
-similarity_val = np.mean(min_values)
-
-print("similarity_val: ",similarity_val)
+plt.plot(np.arange(len(n_observations)),n_observations) 
+plt.show() 
