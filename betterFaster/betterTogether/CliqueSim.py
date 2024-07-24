@@ -507,13 +507,18 @@ class clique_simulator():
         if self.verbose:
             print("There are {} posteriors".format(len(self.posteriors.keys())))
         
+        if np.all(posteriors_t  == 0): 
+            input("Hol Up") 
+
         reinit_ids = []
         for i,c in enumerate(self.posteriors.keys()):
             #print("len(posteriors_t):",len(posteriors_t))
             self.posteriors[c][global_t] = posteriors_t[i]
             if c in observed_cliques and self.posteriors[c][global_t] < 0.1:  
+                print() 
                 print("this is c:{} and the posterior: {}".format(c,self.posteriors[c][global_t]))
                 print("WHY IS THIS POSTERIOR SO LOW LOW EVEN THOUGH THE CLIQUE IS BEING OBSERVED?")
+                print() 
                 reinit_ids.append(c) 
                 
         persistent_obs = []
@@ -740,11 +745,19 @@ class clique_simulator():
             id_ = get_reinitted_id(self.all_data_associations,self.current_exp,id_,self.current_exp) 
             print("id_ was not in either cone or tree ids... this is reinitted id: ",id_)
 
+        if id_ is None:
+            print("this is t: ",t)
+            print("want to find the previous growth states for this id...") 
+            print("orig_id: ",orig_id) 
+            print("self.current_exp: ",self.current_exp) 
+            print("self.all_data_associations: ",self.all_data_associations)
+            id_ = orig_id 
+
         if id_ in self.cone_ids:
             T_nu = self.T_nu_cone  
         elif id_ in self.tree_ids: 
             T_nu = self.T_nu_tree  
-            
+
         d_t,_ = self.get_prev_gstates_id(id_,t)
 
         #print("this is d_t: ",d_t)

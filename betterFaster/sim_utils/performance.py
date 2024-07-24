@@ -304,8 +304,6 @@ class PerformanceTracker:
                     print("Dont worry ... Mean landmark estimation error is decreasing!") 
                     decrease_rate = (mean_lm_err0 - mean_lm_err1) / 100
                     print("decrease rate: ",np.round(decrease_rate,2))
-                elif np.round(mean_lm_err1,2) == np.round(mean_lm_err1,2): 
-                    print("Mean landmark estimation error is holding steady ...")
                 else:
                     increase_rate = (mean_lm_err1 - mean_lm_err0) / 100 
                     print("Mean landmark estimation error is locally increasing :/") 
@@ -628,15 +626,23 @@ class PerformanceTracker:
 
         #other 
         growth_state_estimates = clique.growth_state_estimates  
-        posteriors = clique.posteriors 
         cone_feature_description_cache = clique.cone_feature_description_cache 
         tree_feature_description_cache = clique.tree_feature_description_cache 
         int_clique_states["growth_state_estimates"] = growth_state_estimates
         int_clique_states["cone_feature_description_cache"] = cone_feature_description_cache
         int_clique_states["tree_feature_description_cache"] = tree_feature_description_cache
-        int_clique_states["posteriors"] = posteriors 
+        int_clique_states["posteriors"] = clique.posteriors  
         int_clique_states["observation_cache"] = clique.observation_cache
 
+        if t > 100: 
+            for id_ in clique.posteriors.keys(): 
+                posteriors_id = clique.posteriors[id_] 
+                last_posteriors = posteriors_id[t-100:t] 
+                if np.all(last_posteriors) == 0: 
+                    print() 
+                    print("WARNING the last 100 posteriors for this clique: {} are zero".format(id_))
+                    print() 
+                    
         #print("int_clique_states.keys(): ",int_clique_states.keys()) 
         for c in int_clique_states.keys():
             if isinstance(c,int):

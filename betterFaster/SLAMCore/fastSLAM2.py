@@ -128,8 +128,8 @@ class fastSLAM2():
 				z_t = [obs_range,obs_bearing] 
 				#check if the landmark has been observed yet or not 
 				particle_landmarks = self.particles[k].landmarks 
-				print("[x.lm_id for x in particle_landmarks]: ", [x.lm_id for x in particle_landmarks])
-				print("observation: ",observation)  
+				#print("[x.lm_id for x in particle_landmarks]: ", [x.lm_id for x in particle_landmarks])
+				#print("observation: ",observation)  
 				for i,lm in enumerate(particle_landmarks):
 					if lm.lm_id == obs_id:
 						lm_idx = i 
@@ -149,9 +149,9 @@ class fastSLAM2():
 		for k in range(self.n): 
 			for id_ in reinit_ids:
 				idx = np.where([x.lm_id for x in self.particles[k].landmarks] == id_)[0][0]
-				print("lms: ",[x.lm_id for x in self.particles[k].landmarks] )
-				print("id_: ",id_) 
-				print("idx: ",idx) 
+				#print("lms: ",[x.lm_id for x in self.particles[k].landmarks] )
+				#print("id_: ",id_) 
+				#print("idx: ",idx) 
 				self.particles[k].landmarks[idx].mu = np.zeros((2,)) 
 				self.particles[k].landmarks[idx].sigma = np.zeros((2,2))  
-				self.particles[k].landmarks[idx].isobserved = False 
+				self.particles[k].landmarks[idx].isobserved = False  

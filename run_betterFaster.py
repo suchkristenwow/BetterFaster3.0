@@ -66,7 +66,7 @@ class RunBetterFaster:
             else: 
                 input("The processed experiment observations path does not exist")
         else:
-            obsd_clique_path = os.path.join(results_dir,"observation_pickles/exp"+str(exp + 1)+"observed_cliques.pickle")
+            obsd_clique_path = os.path.join(results_dir,"observation_pickles/exp"+str(exp)+"observed_cliques.pickle")
             with open(obsd_clique_path,"rb") as handle: 
                 exp_observations = pickle.load(handle)
 
@@ -181,14 +181,14 @@ class RunBetterFaster:
 
             slam_time0 = time.time()
             #3a. Estimate Pose 
-            print("gt pose: ",[gt_car_traj[t,0],gt_car_traj[t,1],gt_car_traj[t,2]])
+            #print("gt pose: ",[gt_car_traj[t,0],gt_car_traj[t,1],gt_car_traj[t,2]])
             estimated_pose = slam.prediction([gt_car_traj[t,0],gt_car_traj[t,1],gt_car_traj[t,2]]) #x,y,yaw
             observations_t = exp_observations[t] 
 
             #observations_t = reject_outliers(sim_utils,[gt_car_traj[t,0],gt_car_traj[t,1],gt_car_traj[t,2]],observations_t)
 
             n_any_observations.append(len(observations_t)) 
-            print("there were {} observations this timestep".format(len(observations_t))) 
+            #print("there were {} observations this timestep".format(len(observations_t))) 
             
             slam_time1 = time.time() 
 
@@ -196,7 +196,7 @@ class RunBetterFaster:
             #3c. update clique sim to find persistent landmarks 
             persistent_observations,reinit_ids = clique_sim.update(t,observations_t)
 
-            slam.reinit_EKFs(reinit_ids) 
+            #slam.reinit_EKFs(reinit_ids) 
             #persistent_observations = observations_t # removing the clique step for debugging 
             
             n_persistent_observations.append(len(persistent_observations)) 
@@ -209,12 +209,14 @@ class RunBetterFaster:
             slam.correction(persistent_observations)
 
             #DEBUG 
+            '''
             idx = np.argmax([x.weight for x in slam.particles]) 
             best_landmarks = slam.particles[idx].landmarks 
             for landmark in best_landmarks: 
                 landmark_center = landmark.mu 
                 if not np.all(landmark_center == 0): 
                     print("Best guess center estimate landmark {}: {}".format(landmark.lm_id,landmark_center))
+            ''' 
 
             slam_time3 = time.time() 
 
@@ -264,9 +266,9 @@ class RunBetterFaster:
                 if np.mod(t,self.args.int_pickle_frequency) == 0 or t == sim_length - 1:
                     #Pickle intermediate results so we can load them in later if need be 
                     print("pickling intermediate results!")
-                    int_background_process = multiprocessing.Process(target=pickle_intermediate_results_background, args=(performance_tracker,clique_sim, slam, t))
-                    #performance_tracker.pickle_intermediate_results(clique_sim,slam,t)
-                    int_background_process.start()
+                    #int_background_process = multiprocessing.Process(target=pickle_intermediate_results_background, args=(performance_tracker,clique_sim, slam, t))
+                    performance_tracker.pickle_intermediate_results(clique_sim,slam,t)
+                    #int_background_process.start()
                     #input("This is the intermediate pickling step. Press Enter to Continue...")
 
         #4. Write results 

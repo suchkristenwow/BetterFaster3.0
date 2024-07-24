@@ -222,6 +222,11 @@ class betterFaster_plot:
                 if self.ax_bounds[0] < self.gt_trees[i,1] and self.gt_trees[i,1] < self.ax_bounds[1]: 
                     if self.ax_bounds[2] < self.gt_trees[i,2]  and self.gt_trees[i,2] < self.ax_bounds[3]: 
                         reinitted_id = get_reinitted_id(self.all_data_associations,self.exp,self.gt_trees[i,0]) 
+                        if not self.gt_trees[i,0] in self.gt_gstates[:,0]:
+                            print("this is id: ",self.gt_trees[i,0]) 
+                            print("self.gt_trees: ",self.gt_trees) 
+                            print("self.gt_gstates: ",self.gt_gstates) 
+                            raise OSError 
                         self.ax.text(self.gt_trees[i,1],self.gt_trees[i,2],str(reinitted_id),fontsize=8,color="k",ha='center', va='center')
 
         else:
@@ -237,6 +242,11 @@ class betterFaster_plot:
                 if self.ax_bounds[0] < self.gt_cones[i,1] and self.gt_cones[i,1] < self.ax_bounds[1]: 
                     if self.ax_bounds[2] < self.gt_cones[i,2] and self.gt_cones[i,2] < self.ax_bounds[3]: 
                         reinitted_id = get_reinitted_id(self.all_data_associations,self.exp,self.gt_cones[i,0]) 
+                        if not self.gt_cones[i,0] in self.gt_gstates[:,0]:
+                            print("this is id: ",self.gt_cones[i,0]) 
+                            print("self.gt_trees: ",self.gt_cones) 
+                            print("self.gt_gstates: ",self.gt_gstates) 
+                            raise OSError 
                         self.ax.text(self.gt_cones[i,1],self.gt_cones[i,2],str(reinitted_id),fontsize=8,color="k",ha='center', va='center')
             
         else:
@@ -250,11 +260,9 @@ class betterFaster_plot:
         x = robot_pose[0]
         y = robot_pose[1]
 
-        print("robot_pose: ",robot_pose) 
-
         yaw = robot_pose[-1]
-        print("yaw:",yaw)
-        print("yaw(deg): ",np.rad2deg(yaw)) 
+        #print("yaw:",yaw)
+        #print("yaw(deg): ",np.rad2deg(yaw)) 
 
         robot_circle = plt.Circle((x, y), 0.35, color='red', fill=True)
         # Calculate the end point of the arrow based on x, y, and yaw 
@@ -409,12 +417,29 @@ class betterFaster_plot:
                     idx = np.where(self.gt_gstates[:,0] == id_)
                     gt_gstate_id = int(self.gt_gstates[idx,1]) 
                 else: 
-                    print("id_:",id_) 
                     first_key = min([x for x in self.all_data_associations.keys()]) 
+                    print("This is the original id_ :",id_)
                     if id_ in self.all_data_associations[first_key]:
-                        reinit_id = get_reinitted_id(self.all_data_associations,self.exp,id_,optional_exp=self.exp)  
-                        idx = int(np.where(self.gt_gstates[:,0] == reinit_id).squeeze()) 
-                        gt_gstate_id = int(self.gt_gstates[idx,1]) 
+                        idx = np.where(self.all_data_associations[first_key][:,0] == id_) 
+                        lm_pos = self.all_data_associations[first_key][idx,1:]; lm_pos = np.reshape(lm_pos,(2,))
+                        print("lm_pos:",lm_pos) 
+                        print("self.all_data_associations[self.exp + 1]: ",self.all_data_associations[self.exp + 1]) 
+                        idx = np.where((self.all_data_associations[self.exp + 1][:,1:] == lm_pos).all(axis=1))[0]     
+                        print("idx: ",idx) 
+                        reinitted_id = self.all_data_associations[self.exp + 1][idx,0] 
+                        print("reinitted_id: ",reinitted_id) 
+                        if reinitted_id.size == 0:
+                            print("self.gt_gstates: ",self.gt_gstates) 
+                            print("self.all_data_associations: ",self.all_data_associations) 
+                            raise OSError
+                        print("self.gt_gstates: ",self.gt_gstates)
+                        if reinitted_id not in self.gt_gstates[:,0]:
+                            raise OSError 
+                        else:
+                            idx = np.where(self.gt_gstates[:,0] == reinitted_id)[0] 
+                            print("idx: ",idx) 
+                            print("type(idx): ",type(idx) )
+                            gt_gstate_id = int(self.gt_gstates[idx,1])  
                     else:
                         for j in self.all_data_associations.keys(): 
                             if id_ in self.all_data_associations[j][:,0]:
@@ -511,14 +536,27 @@ class betterFaster_plot:
     
     def get_lm_estimate_error(self,id_,best_landmarks): 
         best_landmark_ids = [x.lm_id for x in best_landmarks]
-        #print("best_landmark_ids: ",best_landmark_ids)
-        orig_id = None 
+        print("trying to get lm estimate error!")
+        print("this is id_: ",id_) 
+        if not isinstance(id_,int):
+            if not isinstance(id_,np.int64): 
+                if isinstance(id_,np.float64):
+                    id_ = int(id_) 
+                else: 
+                    print("this is id_: ",id_)
+                    print("type(id_): ",type(id_)) 
+                    raise OSError 
         if not id_ in best_landmark_ids:
             id_ = None 
             for i in self.all_data_associations.keys(): 
                 id_ = get_reinitted_id(self.all_data_associations,self.exp,id_,optional_exp=i)
-                if id_ in best_landmark_ids: 
-                    break
+                if id_ is not None: 
+                    if id_ in best_landmark_ids: 
+                        print("found valid id_: ",id_)
+                        break 
+                    elif int(id_) in best_landmark_ids: 
+                        id_ = int(id_)
+                        break 
             '''
             id_ = get_reinitted_id(self.all_data_associations,self.exp,id_,optional_exp=min([x for x in self.all_data_associations.keys()])) 
             if id_ not in best_landmark_ids: 
@@ -707,7 +745,7 @@ class betterFaster_plot:
 
             
             mean_range = np.mean(observation_ranges); mean_bearing = np.mean(observation_bearings) * (np.pi/180)  
-            print("id_: {}, Mean range: {}, Mean bearing (rad): {}, Mean bearing (deg): {}".format(id_,mean_range,mean_bearing,np.mean(observation_bearings)))  
+            #print("id_: {}, Mean range: {}, Mean bearing (rad): {}, Mean bearing (deg): {}".format(id_,mean_range,mean_bearing,np.mean(observation_bearings)))  
   
             observation_x = robot_pose[0] + mean_range*np.cos(mean_bearing) 
             observation_y = robot_pose[1] + mean_range*np.sin(mean_bearing) 
