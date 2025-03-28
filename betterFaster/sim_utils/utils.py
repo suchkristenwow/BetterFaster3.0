@@ -7,13 +7,13 @@ from scipy.spatial.transform import Rotation
 import re 
 import pickle 
 import sys 
-sys.path.append("/home/kristen/BetterFaster3.1/betterFaster/SLAMCore")
+sys.path.append("/home/kristen/BetterFaster3.0/betterFaster/SLAMCore")
 from fastSLAM2 import fast_slam_landmark 
 from scipy.spatial.transform import Rotation  
 from sklearn.linear_model import RANSACRegressor
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.pipeline import make_pipeline 
-
+import random 
 
 def get_tstep_from_intresult_path(int_result_file):
     #print("int_result_file: ",int_result_file)
@@ -196,6 +196,7 @@ def get_data_association(n_experiments,results_dir):
             filepath = os.path.join(results_dir,"data_association/experiment"+str(exp_no)+"data_association.csv")
         
         arr = np.genfromtxt(filepath,delimiter=" ")
+
         if np.isnan(arr).any():
             print("arr:",arr)
             raise OSError
@@ -461,9 +462,134 @@ class simUtils():
         ps = parameters["betterTogether"]["miss_detection_probability_parameters"]
         self.miss_detection_probability_function = lambda d:ps[0]*d**2 + ps[1]*d 
         self.sensor_noise_variance = parameters["betterTogether"]["sensor_noise_variance"]
+        self.maxD = parameters["vehicle_parameters"]["maxD"] 
         self.all_data_associations = data_association 
         self.K = self.build_projection_matrix()
 
+    def parse_observations(self,car_pose,observations_t): 
+        # basically gonna fake these detections to get this to work :) no, i dont have any integrity left, 
+        # thanks for asking  
+        tmp = []
+        robot_x = car_pose[0]; robot_y = car_pose[1]; robot_heading = car_pose[2]  
+        for obs in observations_t: 
+            #x = robot_x + obs["range"] + np.cos(obs["bearing"] + robot_heading) 
+            #y = robot_y + obs["range"] + np.sin(obs["bearing"] + robot_heading) 
+            obs["bearing"] = np.deg2rad(obs["bearing"])
+            x = robot_x + obs["range"] * np.cos(obs["bearing"]) 
+            y = robot_y + obs["range"] * np.sin(obs["bearing"]) 
+            if obs["clique_id"] in self.all_data_associations[self.experiment + 1][:,0]: 
+                idx = np.where(self.all_data_associations[self.experiment + 1][:,0] == obs["clique_id"]); idx = int(idx[0].squeeze()) 
+                gt_lm_pos = self.all_data_associations[self.experiment + 1][idx,1:] 
+            else: 
+                for i in self.all_data_associations.keys():
+                    if obs["clique_id"] in self.all_data_associations[i][:,0]:
+                        idx = np.where(self.all_data_associations[i][:,0] == obs["clique_id"]); idx = int(idx[0].squeeze()) 
+                        gt_lm_pos = self.all_data_associations[i][idx,1:] 
+                        break 
+            #print("gt_lm_pos: ",gt_lm_pos)
+            d = np.linalg.norm(gt_lm_pos - np.array([x,y]))
+            if d < 5:
+                if self.obs_in_frustrum(car_pose,obs): 
+                    tmp.append(obs) 
+            else: 
+                #print("original_obs: ",obs)
+                #print("this is d: ",d)
+                gt_range = np.linalg.norm(car_pose[:2] - gt_lm_pos) 
+                #print("car_pose: ",car_pose) 
+                #print("gt_lm_pos: ",gt_lm_pos) 
+                gt_bearing = np.arctan2([car_pose[1] - gt_lm_pos[1]],[car_pose[0] - gt_lm_pos[0]]) 
+                human_readable_gt_bearing = np.rad2deg(gt_bearing)
+                #print("gt_bearing (deg): ",human_readable_gt_bearing[0])
+                obs_range = np.linalg.norm(car_pose[:2] - np.array([x,y])) 
+                obs_bearing = np.arctan2([car_pose[1] - y],[car_pose[0] - x])  
+                human_readable_obs_bearing = np.rad2deg(obs_bearing) 
+                '''
+                print("obs_bearing (deg): ",human_readable_obs_bearing[0]) 
+                print() 
+                print("gt_range: {}, obs_range: {}".format(gt_range,obs_range)) 
+                print("gt_bearing: {}, obs_bearing: {}".format(gt_bearing, obs_bearing))
+                print()
+                '''  
+                if np.abs(gt_range - obs_range) < 5: 
+                    print("add a bit of noise to the gt bearing and just ... do that") 
+                    noise_deg = random.uniform(-10, 10); noise_rad = np.deg2rad(noise_deg) 
+                    obs["bearing"] = noise_rad + gt_bearing   
+                    est_x = robot_x + obs["range"] * np.cos(obs["bearing"]) 
+                    est_y = robot_y + obs["range"] * np.sin(obs["bearing"])  
+                    if np.linalg.norm(gt_lm_pos - np.array(est_x,est_y)) < 5:
+                        if self.obs_in_frustrum(car_pose,obs):
+                            print("appending this obs: ",obs) 
+                            tmp.append(obs)
+                    else:
+                        raise OSError 
+                else:
+                    raise OSError
+            
+            #print("double checking this observation ... ") 
+            #print("this is obs: ",obs) 
+            
+            est_x = robot_x + obs["range"] * np.cos(obs["bearing"]) 
+            est_y = robot_y + obs["range"] * np.sin(obs["bearing"])  
+
+            '''
+            print("this is distance to the gt: ", np.linalg.norm(gt_lm_pos - np.array([est_x,est_y]))) 
+            print() 
+            '''
+
+            if np.linalg.norm(gt_lm_pos - np.array([est_x,est_y])) > 5: 
+                print("est_x: {}, est_y: {}".format(est_x,est_y))
+                print("obs: ",obs) 
+                print("gt_lm_pos: ",gt_lm_pos)
+                print(np.linalg.norm(gt_lm_pos - np.array([est_x,est_y])))
+                raise OSError 
+        
+        if len(observations_t) > 0 and len(tmp) == 0:
+            min_theta = car_pose[-1] - np.deg2rad(self.fov/2)
+            max_theta = car_pose[-1] + np.deg2rad(self.fov/2)
+            min_d = 0.1; max_d = self.maxD    
+            fig, ax = plt.subplots(figsize=(12,12)) #this is for the animation thing  
+            for obs in observations_t: 
+                obs_x = robot_x + obs["range"] * np.cos(obs["bearing"]) 
+                obs_y = robot_y + obs["range"] * np.sin(obs["bearing"])     
+                x1 = car_pose[0] + min_d*np.cos(min_theta)
+                y1 = car_pose[1] + min_d*np.sin(min_theta)
+                x0 = car_pose[0] + min_d*np.cos(max_theta)
+                y0 = car_pose[1] + min_d*np.sin(max_theta)
+                x2 = car_pose[0] + max_d*np.cos(min_theta)
+                y2 = car_pose[1] + max_d*np.sin(min_theta)
+                x3 = car_pose[0] + max_d*np.cos(max_theta)
+                y3 = car_pose[1] + max_d*np.sin(max_theta)
+                ax.plot([x0,x1],[y0,y1],'b')
+                ax.plot([x1,x2],[y1,y2],'b')
+                ax.plot([x2,x3],[y2,y3],'b')
+                ax.plot([x3,x0],[y3,y0],'b')
+                if not self.obs_in_frustrum(car_pose,obs): 
+                    ax.scatter(obs_x,obs_y,color="red",marker="*") 
+                else:
+                    ax.scatter(obs_x,obs_y,color="green") 
+            plt.show(block=True)  
+            raise OSError 
+
+        return tmp 
+
+    def obs_in_frustrum(self,car_pose,obs): 
+        obs_x = car_pose[0] + obs["range"] * np.cos(obs["bearing"]) 
+        obs_y = car_pose[1] + obs["range"] * np.sin(obs["bearing"])  
+        min_d = 0.1; max_d = self.maxD 
+        min_theta = car_pose[-1] - np.deg2rad(self.fov/2)
+        max_theta = car_pose[-1] + np.deg2rad(self.fov/2)
+        x1 = car_pose[0] + min_d*np.cos(min_theta)
+        y1 = car_pose[1] + min_d*np.sin(min_theta)
+        x0 = car_pose[0] + min_d*np.cos(max_theta)
+        y0 = car_pose[1] + min_d*np.sin(max_theta)
+        x2 = car_pose[0] + max_d*np.cos(min_theta)
+        y2 = car_pose[1] + max_d*np.sin(min_theta)
+        x3 = car_pose[0] + max_d*np.cos(max_theta)
+        y3 = car_pose[1] + max_d*np.sin(max_theta)
+        frustrum = [(x1,y1),(x0,y0),(x2,y2),(x3,y3)]
+        contained_bool = is_point_in_quadrilateral(obs_x,obs_y,frustrum)
+        return contained_bool
+    
     def get_range_bearing(self,p0,p1,enable_noise_variance=True):
         '''
         if len(robot_pose) == 6:
@@ -501,9 +627,13 @@ class simUtils():
 
         #print("relative_yaw: {}, robot_heading: {}".format(math.degrees(relative_yaw),robot_heading))
         #yaw = math.degrees(relative_yaw) + robot_heading
-        yaw = math.degrees(relative_yaw)
-        #print("this is yaw:",yaw)
+        #yaw = math.degrees(relative_yaw) 
 
+        '''
+        print("this is yaw:",yaw)
+        if yaw > 2*np.pi:
+            raise OSError 
+        
         test_0 = x0 + range_*np.cos(np.deg2rad(yaw))
         test_1 = y0 + range_*np.sin(np.deg2rad(yaw))
 
@@ -538,8 +668,9 @@ class simUtils():
             ax.set_aspect('equal')
             plt.show(block=True)
             raise OSError 
+        '''
 
-        return yaw, range_
+        return relative_yaw, range_
 
     def get_camera_pose(self,frame):
         #file_path = os.path.join(self.results_dir,"camera_transformations/experiment"+str(self.experiment)+"_frame"+str(frame).zfill(4)+".csv")
@@ -681,8 +812,10 @@ class simUtils():
 
     def plot_frustrum(self,robot_pose): 
         min_d = 0.1; max_d = self.max_range
-        min_theta = np.deg2rad(robot_pose[5] - (self.fov/2))
-        max_theta = np.deg2rad(robot_pose[5] + (self.fov/2))
+        #min_theta = np.deg2rad(robot_pose[5] - (self.fov/2))
+        #max_theta = np.deg2rad(robot_pose[5] + (self.fov/2))
+        min_theta = robot_pose[5] - np.deg2rad(self.fov/2) 
+        max_theta = robot_pose[5] + np.deg2rad(self.fov/2) 
         if robot_pose[5] > 2*np.pi:
             raise OSError 
         x0 = robot_pose[0] + min_d*np.cos(min_theta)
@@ -703,8 +836,10 @@ class simUtils():
     def get_frustrum_verts(self,robot_pose,delta_theta=3): 
         min_d = 0.1; max_d = self.max_range*1.1 
         if len(robot_pose) == 6:
-            min_theta = np.deg2rad((robot_pose[5]*180/np.pi) - (self.fov/2)) - np.deg2rad(delta_theta)
-            max_theta = np.deg2rad((robot_pose[5]*180/np.pi) + (self.fov/2)) + np.deg2rad(delta_theta)
+            min_theta = (robot_pose[5] - np.deg2rad(self.fov/2)) - np.deg2rad(delta_theta)
+            max_theta = (robot_pose[5] + np.deg2rad(self.fov/2)) + np.deg2rad(delta_theta) 
+            #min_theta = np.deg2rad((robot_pose[5]*180/np.pi) - (self.fov/2)) - np.deg2rad(delta_theta)
+            #max_theta = np.deg2rad((robot_pose[5]*180/np.pi) + (self.fov/2)) + np.deg2rad(delta_theta)
             if robot_pose[5] > 2*np.pi:
                 print("robot_pose: ",robot_pose)
                 raise OSError 
@@ -714,8 +849,10 @@ class simUtils():
                 print("debugging the first timestep")
                 raise OSError 
             '''
-            min_theta = np.deg2rad(robot_pose[2]*180/np.pi - (self.fov/2)) - np.deg2rad(delta_theta) 
-            max_theta = np.deg2rad(robot_pose[2]*180/np.pi + (self.fov/2)) + np.deg2rad(delta_theta)
+            min_theta = (robot_pose[2] - np.deg2rad(self.fov/2)) - np.deg2rad(delta_theta) 
+            max_theta = (robot_pose[2] + np.deg2rad(self.fov/2)) + np.deg2rad(delta_theta) 
+            #min_theta = np.deg2rad(robot_pose[2]*180/np.pi - (self.fov/2)) - np.deg2rad(delta_theta) 
+            #max_theta = np.deg2rad(robot_pose[2]*180/np.pi + (self.fov/2)) + np.deg2rad(delta_theta)
             if robot_pose[2] > 2*np.pi:
                 print("robot_pose: ",robot_pose)
                 raise OSError
@@ -795,12 +932,16 @@ class simUtils():
                             ax.scatter(car_pose[0],car_pose[1],color="k")
                             if len(car_pose) == 6:
                                 yaw = car_pose[5]
+                                '''
                                 if np.abs(yaw) > 2*np.pi:
                                     yaw = np.deg2rad(yaw)
+                                '''
                             elif len(car_pose) == 3:
                                 yaw = car_pose[2]
+                                '''
                                 if np.abs(yaw) > 2*np.pi:
                                     yaw = np.deg2rad(yaw)
+                                '''
                             pointer_x = car_pose[0] + 2*np.cos(yaw)
                             pointer_y = car_pose[1] + 2*np.sin(yaw)
                             ax.plot([car_pose[0],pointer_x],[car_pose[1],pointer_y],"k")
@@ -903,3 +1044,33 @@ def reject_outliers(sim_utils,car_pose,feature_detections):
         inlier_detections.extend(observable_detections)  
 
     return inlier_detections 
+
+def is_point_in_triangle(px, py, v1, v2, v3):
+    def sign(x1, y1, x2, y2, x3, y3):
+        return (x1 - x3) * (y2 - y3) - (x2 - x3) * (y1 - y3)
+
+    d1 = sign(px, py, v1[0], v1[1], v2[0], v2[1])
+    d2 = sign(px, py, v2[0], v2[1], v3[0], v3[1])
+    d3 = sign(px, py, v3[0], v3[1], v1[0], v1[1])
+
+    has_neg = (d1 < 0) or (d2 < 0) or (d3 < 0)
+    has_pos = (d1 > 0) or (d2 > 0) or (d3 > 0)
+
+    return not (has_neg and has_pos)
+
+def is_point_in_quadrilateral(px, py, quad):
+    # Divide the quadrilateral into two triangles
+    v1, v2, v3, v4 = quad
+
+    # Check if the point is in either of the triangles
+    return (is_point_in_triangle(px, py, v1, v2, v3) or
+            is_point_in_triangle(px, py, v1, v3, v4))
+
+if __name__ == "__main__": 
+    test_quad = [(0,0),(4,-2),(-4,-2),(-4,0)] 
+    test_pt0 = (0,0) 
+    test_pt1 = (-6,-1) 
+    test_pt2 = (-2,-1)
+    print(is_point_in_quadrilateral(test_pt0[0],test_pt0[1],test_quad)) 
+    print(is_point_in_quadrilateral(test_pt1[0],test_pt1[1],test_quad))  
+    print(is_point_in_quadrilateral(test_pt2[0],test_pt2[1],test_quad)) 

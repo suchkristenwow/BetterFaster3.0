@@ -4,17 +4,11 @@ from matplotlib.patches import Ellipse
 from matplotlib.animation import FuncAnimation
 import os 
 from betterFaster.sim_utils.utils import get_reinitted_id 
+import threading 
 import cv2 
 import time 
 import random 
-import psutil 
-import pynvml
-from Xlib import X, display 
-import ctypes
-import threading 
-
-# Initialize X11 threading
-display.Display().sync()
+import multiprocessing as mp 
 
 def wrap_angle(angle): 
     # Use modulo operation to wrap the angle
@@ -33,86 +27,12 @@ def generate_random_colors(n):
         colors.append(color)
     return colors
 
-def monitor_resources_thread():
-    while True: 
-        monitor_resources() 
-        time.sleep(5) 
-
-def monitor_resources(cpu_threshold=90.0, gpu_threshold=90.0, ram_threshold=90.0, wait_time=3):
-    # Monitor CPU Usage
-    cpu_usage = psutil.cpu_percent(interval=1)
-    print(f"CPU Usage: {cpu_usage:.2f}%")
-    
-    max_wait = 100 
-    wait = 0
-    if cpu_usage > cpu_threshold:
-        print(f"CPU usage exceeded {cpu_threshold}%. Pausing script.")
-        while cpu_usage > cpu_threshold:
-            if wait < max_wait: 
-                time.sleep(wait_time)  # Pause for 5 seconds
-                wait += wait_time 
-                cpu_usage = psutil.cpu_percent(interval=1)
-                print(f"Rechecking CPU usage: {cpu_usage:.2f}%") 
-            else:
-                break 
-    
-    # Monitor RAM Usage
-    process = psutil.Process(os.getpid())
-    memory_usage = process.memory_info().rss / (1024 ** 2)  # Memory usage in MB
-    memory_percent = process.memory_percent()
-
-    print(f"Memory Usage: {memory_usage:.2f} MB ({memory_percent:.2f}%)")
-    
-    max_wait = 100 
-    wait = 0 
-    if memory_percent > ram_threshold:
-        print(f"Memory usage exceeded {ram_threshold}%. Pausing script.")
-        while memory_percent > ram_threshold:
-            if wait < max_wait: 
-                time.sleep(wait_time)  # Pause for 5 seconds
-                wait += wait_time 
-                memory_percent = process.memory_percent()
-                print(f"Rechecking memory usage: {memory_percent:.2f}%") 
-            else:
-                break 
-
-    # Monitor GPU Usage
-    handle = pynvml.nvmlDeviceGetHandleByIndex(0)  # Assuming a single GPU system. Adjust index if necessary.
-    mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-    util_info = pynvml.nvmlDeviceGetUtilizationRates(handle)
-
-    memory_usage = mem_info.used / mem_info.total * 100  # GPU memory usage percentage
-    gpu_utilization = util_info.gpu  # GPU utilization percentage
-
-    print(f"GPU Memory Usage: {memory_usage:.2f}%")
-    print(f"GPU Utilization: {gpu_utilization:.2f}%")
-
-    max_wait = 100 
-    wait = 0
-    if memory_usage > gpu_threshold or gpu_utilization > gpu_threshold:
-        print(f"GPU usage exceeded {gpu_threshold}%. Pausing script.")
-        while memory_usage > gpu_threshold or gpu_utilization > gpu_threshold:
-            if wait < max_wait: 
-                time.sleep(wait_time)  # Pause for 5 seconds
-                wait += wait_time 
-                mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-                util_info = pynvml.nvmlDeviceGetUtilizationRates(handle)
-                memory_usage = mem_info.used / mem_info.total * 100
-                gpu_utilization = util_info.gpu
-                print(f"Rechecking GPU usage: Memory {memory_usage:.2f}%, Utilization {gpu_utilization:.2f}%") 
-            else:
-                break 
-    
 class betterFaster_plot:
     def __init__(self,n_experiments,exp,parameters,gt_car_traj,observed_clique_ids,gt_gstates,prev_lm_est_err=None,data_association=None,frame_dir=None,show_plots=False,verbose=False,plot_int_results=False):
         if show_plots: 
             plt.ion() 
-        self.show_plots = show_plots
-
+        self.show_plots = show_plots 
         print("initialize plotter...")
-        
-        ctypes.CDLL('libX11.so').XInitThreads()  
-
         sim_length = parameters["sim_length"]
         results_dir = parameters["results_dir"]
         self.isCarla = parameters["isCarla"]
@@ -130,9 +50,9 @@ class betterFaster_plot:
         self.fig = fig; self.ax = ax 
         #self.traj_err_fig, self.traj_err_ax = plt.subplots() 
         if plot_int_results: 
-            self.posterior_fig, self.posterior_ax = plt.subplots(nrows=1, ncols=n_axis, figsize=(18, 3))
+            self.posterior_fig, self.posterior_ax = plt.subplots(nrows=1, ncols=n_axis, figsize=(16, 3))
             self.lm_estimate_fig, self.lm_estimate_ax = plt.subplots(nrows=1, ncols=n_axis, figsize=(16,3))
-            self.gstate_err_fig, self.gstate_err_ax = plt.subplots(nrows=1, ncols=n_axis,figsize=(18,3)) 
+            self.gstate_err_fig, self.gstate_err_ax = plt.subplots(nrows=1, ncols=n_axis,figsize=(16,3)) 
         self.exp = exp 
         self.sim_length = sim_length
         self.observed_clique_ids = [x for x in observed_clique_ids] 
@@ -286,10 +206,6 @@ class betterFaster_plot:
             self.lm_estimate_times = []
             self.gstate_err_times = []
         '''
-        #Monitoring thread 
-        monitor_thread = threading.Thread(target=monitor_resources_thread)
-        monitor_thread.daemon=True 
-        monitor_thread.start() 
 
     def bev_plot(self,robot_pose,observations_t,slam,t): 
         self.ax.clear()
@@ -364,17 +280,23 @@ class betterFaster_plot:
         self.plot_lm_ellipsoids(slam)
             
     def plot_state(self,slam,t,robot_pose,observations_t,posteriors,growth_state_estimates): 
-        if t == 0:
-            #Initialize NVML
-            pynvml.nvmlInit()
-
         global_t = self.exp * self.sim_length + t
 
         self.bev_plot(robot_pose,observations_t,slam,t)        
 
-        self.plot_posteriors(t,posteriors,observations_t) 
-        self.plot_lm_estimate_err(slam,observations_t,t) 
-        self.plot_gstate_err(t,growth_state_estimates) 
+        if self.plot_int_results:
+            pool = mp.Pool(processes=3)
+
+            pool.apply_async(self.plot_posteriors, args=(t, posteriors, observations_t))
+            pool.apply_async(self.plot_lm_estimate_err, args=(slam, observations_t, t))
+            pool.apply_async(self.plot_gstate_err, args=(t, growth_state_estimates))
+
+            pool.close()
+            pool.join()
+
+            self.posterior_fig.tight_layout()
+            self.lm_estimate_fig.tight_layout()
+            self.gstate_err_fig.tight_layout()
 
         plt.pause(0.05)
 
@@ -416,7 +338,7 @@ class betterFaster_plot:
                 plt.close(self.lm_estimate_fig)
                 self.gstate_err_fig.savefig(f"debugPlots/exp{self.exp}_gstateErr.jpg")
                 plt.close(self.gstate_err_fig)
-                pynvml.nvmlShutdown() 
+
 
     def plot_landmark_estimates(self,slam): 
         for k in range(slam.n):
@@ -542,13 +464,12 @@ class betterFaster_plot:
                 gt_arr = np.ones((global_t,)) * gt_gstate_id 
                 self.gstate_err_ax[i].plot(np.arange(global_t),gt_arr,color="k")
                 tmp = growth_state_estimates[id_][:global_t] 
+                #print("tmp.shape: ",tmp.shape)
                 self.gstate_err_ax[i].plot(np.arange(global_t),growth_state_estimates[id_][:global_t],color="r",linestyle="--")
                 self.gstate_err_ax[i].set_title(f"Clique {id_}")
                 self.gstate_err_ax[i].set_ylim(-0.05,3.05)
 
-        self.gstate_err_fig.suptitle("Growth State Estimates",fontsize=12)  
-        self.gstate_err_fig.tight_layout(rect=[0, 0, 1, 0.95])
-
+        self.gstate_err_fig.suptitle("Growth State Estimates")
         '''
         if self.exp > 0:
             if np.mod(100,t) == 0:
@@ -594,27 +515,26 @@ class betterFaster_plot:
         
         for i, ax in enumerate(self.lm_estimate_ax):
             ax.clear()
-            inc = self.sim_length / 5
-            x_bound = min(int(np.ceil(t / inc) * inc) + 10, self.sim_length) 
-            ax.set_xlim(0, x_bound) 
+            inc = self.sim_length/5
+            x_bound = min(int(np.ceil(t/inc)*inc) + 10, self.sim_length) 
+            ax.set_xlim(0,x_bound) 
             if i < len(observed_cliques_t): 
                 id_ = observed_cliques_t[i] 
-                if id_ not in self.lm_estimate_err_cache.keys():
-                    id_ = get_reinitted_id(self.all_data_associations, self.exp, id_)
+                if not id_ in self.lm_estimate_err_cache.keys():
+                    id_ = get_reinitted_id(self.all_data_associations,self.exp,id_)
                 err_id = self.lm_estimate_err_cache[id_][:global_t]
-                ax.plot(np.arange(global_t), err_id)
+                ax.plot(np.arange(global_t),err_id)
             else: 
-                # Pick random ids 
+                #pick random ids 
                 id_ = unobserved_clique_ids[i - len(observed_cliques_t)]
-                if id_ not in self.lm_estimate_err_cache.keys():
-                    id_ = get_reinitted_id(self.all_data_associations, self.exp, id_, optional_exp=self.exp)
+                #if id_ in self.all_observed_cliques:
+                if not id_ in self.lm_estimate_err_cache.keys():
+                    id_ = get_reinitted_id(self.all_data_associations,self.exp,id_,optional_exp=self.exp)
                 err_id = self.lm_estimate_err_cache[id_][:global_t] 
-                ax.plot(np.arange(global_t), err_id)
-                
-            ax.set_title("LM Estimation Error\n for clique: " + str(id_), fontsize=8)
-            
-        self.lm_estimate_fig.tight_layout(pad=2.0)    
-
+                ax.plot(np.arange(global_t),err_id)
+            #ax.set_ylim(-0.05,12)
+            ax.set_title("LM Estimation Error\n for clique: " + str(id_))
+    
     def get_lm_estimate_error(self,id_,best_landmarks): 
         best_landmark_ids = [x.lm_id for x in best_landmarks]
         #print("trying to get lm estimate error!")
@@ -784,7 +704,7 @@ class betterFaster_plot:
                     return 
 
             idx = sorted(posteriors_t.keys()).index(clique_id)
-            ax.set_title("Posteriors for \n Clique " + str(clique_id),fontsize=8) 
+            ax.set_title("Posteriors for \n Clique " + str(clique_id))
             t_len = len(plot_cache[:, idx])
             t_range = np.arange(t + 1)
             if len(t_range) != t_len:

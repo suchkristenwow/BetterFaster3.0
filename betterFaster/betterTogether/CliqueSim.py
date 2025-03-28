@@ -739,18 +739,20 @@ class clique_simulator():
         global_t = self.current_exp*self.sim_length + t 
 
         if not id_ in self.tree_ids and id_ not in self.cone_ids: 
-            print("self.tree_ids: {}, self.cone_ids: {}".format(self.tree_ids,self.cone_ids))
+            #print("self.tree_ids: {}, self.cone_ids: {}".format(self.tree_ids,self.cone_ids))
             orig_id = id_ 
-            print("orig_id: ",orig_id)
+            #print("orig_id: ",orig_id)
             id_ = get_reinitted_id(self.all_data_associations,self.current_exp,id_,self.current_exp) 
-            print("id_ was not in either cone or tree ids... this is reinitted id: ",id_)
+            #print("id_ was not in either cone or tree ids... this is reinitted id: ",id_)
 
         if id_ is None:
+            '''
             print("this is t: ",t)
             print("want to find the previous growth states for this id...") 
             print("orig_id: ",orig_id) 
             print("self.current_exp: ",self.current_exp) 
             print("self.all_data_associations: ",self.all_data_associations)
+            '''
             id_ = orig_id 
 
         if id_ in self.cone_ids:

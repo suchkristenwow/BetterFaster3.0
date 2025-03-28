@@ -122,6 +122,8 @@ class PerformanceTracker:
         with open(os.path.join(results_dir,"gt_gstates.pickle"),"rb") as handle: 
             self.gt_gstates = pickle.load(handle)
 
+        self.init_script_t = time.time() 
+
         self.results_dir = results_dir
         self.data_association = {} 
         self.gt_trees = {} 
@@ -144,13 +146,16 @@ class PerformanceTracker:
             tree_ids = [int(line.strip()) for line in lines]
 
             #experiment10data_association.csv
-            data_association_path = os.path.join(results_dir,"data_association/experiment"+str(exp+1)+"data_association.csv")
+            data_association_path = os.path.join(results_dir,"data_associations/experiment"+str(exp+1)+"data_association.csv")
             #print("data_associaiton_path: ",data_association_path)
 
             if parameters["isCarla"]:
                 exp_data_association = np.genfromtxt(data_association_path,delimiter=" ") 
             else:
-                data_association_path = "/home/kristen/BetterFaster3.0/sim_utils/fake_data/data_associations"
+                data_association_path = "/home/kristen/BetterFaster3.0/betterFaster/sim_utils/fake_data/data_associations"
+                #/home/kristen/BetterFaster3.0/betterFaster/sim_utils/fake_data/data_associations 
+                if not os.path.exists(os.path.join(data_association_path,"exp"+str(exp)+"_data_association.csv")):
+                    print("os.listdir(data_association_path): ",os.listdir(data_association_path)) 
                 exp_data_association = np.genfromtxt(os.path.join(data_association_path,"exp"+str(exp)+"_data_association.csv"))
 
             self.data_association[exp + 1]  = exp_data_association 
@@ -536,8 +541,11 @@ class PerformanceTracker:
 
         if np.mod(t,10) == 0:
             print("We are {} percent done!".format(np.round(percent_done,2)))
+            elapsed_secs = time.time() - self.init_script_t 
+            elapsed_mins = np.round(elapsed_secs/60,2)
+            print("this script has been running for {} minutes".format(elapsed_mins)) 
 
-        if 10 < len(self.processing_times) < 1000:
+        if 10 < len(self.processing_times): 
             remaining_experiments = self.n_experiments - self.current_exp
             remaining_tsteps = self.sim_length - t  
             mean_secs_tstep = np.mean(self.processing_times)
@@ -578,6 +586,8 @@ class PerformanceTracker:
                 elif np.mod(t,10) == 0:
                     print("Between {} and {} minutes remaining!!!".format(np.round(low_mins_remaining,1),np.round(high_mins_remaining,1)))
                 '''
+
+        print() 
 
         self.update_clique_posteriors(t,clique)
         self.slam_update(t,slam)
@@ -634,15 +644,6 @@ class PerformanceTracker:
         int_clique_states["posteriors"] = clique.posteriors  
         int_clique_states["observation_cache"] = clique.observation_cache
 
-        if t > 100: 
-            for id_ in clique.posteriors.keys(): 
-                posteriors_id = clique.posteriors[id_] 
-                last_posteriors = posteriors_id[t-100:t] 
-                if np.all(last_posteriors) == 0: 
-                    print() 
-                    print("WARNING the last 100 posteriors for this clique: {} are zero".format(id_))
-                    print() 
-                    
         #print("int_clique_states.keys(): ",int_clique_states.keys()) 
         for c in int_clique_states.keys():
             if isinstance(c,int):

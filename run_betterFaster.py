@@ -117,7 +117,11 @@ class RunBetterFaster:
                                             data_association=performance_tracker.all_data_associations,exp_observations=exp_observations,exp_obs_ids=observed_clique_ids,
                                             feature_detection=self.args.enable_feature_detection,verbosity=self.args.verbose,start_time=(self.args.start_experiment,self.args.start_tstep))
             #init_pose,localization_covariance,n_particles,lm_ids,Q_params
-            slam = fastSLAM2(gt_car_traj[0,:],localization_covariance,self.parameters["slam"]["n_particles"],observed_clique_ids,self.parameters["slam"]["betas"])
+            if min(performance_tracker.all_data_associations.keys()) == 0: 
+                x = exp 
+            else: 
+                x = exp + 1 
+            slam = fastSLAM2(gt_car_traj[0,:],localization_covariance,self.parameters["slam"]["n_particles"],observed_clique_ids,self.parameters["slam"]["betas"],performance_tracker.all_data_associations[x]) 
             #start_exp,start_t,postProcessing_dir,clique_sim,slam
             print("loading in previous results...")
             clique_sim,slam = load_in_previous_results(avilable_start_exp,avilable_start_tstep,self.args.postProcessing_dirName,clique_sim,slam)
@@ -128,7 +132,11 @@ class RunBetterFaster:
                                             data_association=performance_tracker.all_data_associations,exp_observations=exp_observations,exp_obs_ids=observed_clique_ids,
                                             feature_detection=self.args.enable_feature_detection,verbosity=self.args.verbose,start_time=(self.args.start_experiment,self.args.start_tstep))
                 #init_pose,localization_covariance,n_particles,lm_ids,Q_params 
-                slam = fastSLAM2(gt_car_traj[0,:],localization_covariance,self.parameters["slam"]["n_particles"],observed_clique_ids,self.parameters["slam"]["betas"])
+                if min(performance_tracker.all_data_associations.keys()) == 0: 
+                    x = exp 
+                else: 
+                    x = exp + 1 
+                slam = fastSLAM2(gt_car_traj[0,:],localization_covariance,self.parameters["slam"]["n_particles"],observed_clique_ids,self.parameters["slam"]["betas"],performance_tracker.all_data_associations[x])
             else:   
                 print("need to preserve the clique instance so the posteriors don't drop between experiments!") 
                 clique_sim = self.performance_tracker.clique_inst 
@@ -182,9 +190,12 @@ class RunBetterFaster:
             slam_time0 = time.time()
             #3a. Estimate Pose 
             #print("gt pose: ",[gt_car_traj[t,0],gt_car_traj[t,1],gt_car_traj[t,2]])
+            #input("Check to make sure yaw is in radians...")
+
             estimated_pose = slam.prediction([gt_car_traj[t,0],gt_car_traj[t,1],gt_car_traj[t,2]]) #x,y,yaw
             observations_t = exp_observations[t] 
 
+            observations_t = sim_utils.parse_observations([gt_car_traj[t,0],gt_car_traj[t,1],gt_car_traj[t,2]], observations_t) 
             #observations_t = reject_outliers(sim_utils,[gt_car_traj[t,0],gt_car_traj[t,1],gt_car_traj[t,2]],observations_t)
 
             n_any_observations.append(len(observations_t)) 
@@ -206,19 +217,53 @@ class RunBetterFaster:
 
             slam_time2 = time.time() 
             #3d. SLAM correction
+
             slam.correction(persistent_observations)
+            slam_time3 = time.time()  
 
             #DEBUG 
-            '''
             idx = np.argmax([x.weight for x in slam.particles]) 
             best_landmarks = slam.particles[idx].landmarks 
             for landmark in best_landmarks: 
                 landmark_center = landmark.mu 
-                if not np.all(landmark_center == 0): 
-                    print("Best guess center estimate landmark {}: {}".format(landmark.lm_id,landmark_center))
-            ''' 
-
-            slam_time3 = time.time() 
+                landmark_id = landmark.lm_id 
+                #print("debugging estimate of landmark {} ...............................".format(landmark_id)) 
+                if np.all(landmark_center == 0): 
+                    continue 
+                #check how far off it is  
+                if min(performance_tracker.all_data_associations.keys()) == 0:
+                    data_associations_exp = performance_tracker.all_data_associations[exp]
+                else:
+                    data_associations_exp = performance_tracker.all_data_associations[exp + 1]
+                if landmark_id in data_associations_exp[:,0]:  
+                    idx = int(np.where(data_associations_exp[:,0] == landmark_id)[0].squeeze()) 
+                    gt_lm_pos = data_associations_exp[idx,1:] 
+                    #print("sanity check... is this the same id: ",data_associations_exp[idx,0]) 
+                else: 
+                    for x in performance_tracker.all_data_associations.keys():
+                        if landmark_id in performance_tracker.all_data_associations[x][:,0]:
+                            idx = int(np.where(performance_tracker.all_data_associations[x][:,0] == landmark_id)[0].squeeze()) 
+                            gt_lm_pos = performance_tracker.all_data_associations[x][idx,1:]   
+                            #print("sanity check... is this the same id: ",performance_tracker.all_data_associations[x][idx,0])
+                            break 
+                #print("gt_lm_pos: ",gt_lm_pos) 
+                #print("landmark_center: ",landmark_center) 
+                d = np.linalg.norm(gt_lm_pos - landmark_center)
+                if d > 5:
+                    print("this is d: ",d)
+                    gt_range = np.linalg.norm(np.array([gt_car_traj[t,0],gt_car_traj[t,1]]) - gt_lm_pos) 
+                    gt_bearing = np.arctan2([gt_car_traj[t,1] - gt_lm_pos[1]],[gt_car_traj[t,0] - gt_lm_pos[0]]) 
+                    human_readable_gt_bearing = np.rad2deg(gt_bearing)
+                    print("gt_bearing (deg): ",human_readable_gt_bearing[0])
+                    obs_range = np.linalg.norm(np.array([gt_car_traj[t,0],gt_car_traj[t,1]]) - landmark_center) 
+                    obs_bearing = np.arctan2([gt_car_traj[t,1] - landmark_center[1]],[gt_car_traj[t,0] - landmark_center[0]])  
+                    human_readable_obs_bearing = np.rad2deg(obs_bearing) 
+                    print("obs_bearing (deg): ",human_readable_obs_bearing[0]) 
+                    print() 
+                    print("gt_range: {}, obs_range: {}".format(gt_range,obs_range)) 
+                    print("gt_bearing: {}, obs_bearing: {}".format(gt_bearing, obs_bearing))
+                    print()  
+                    input("This is sus")
 
             slam_times["prediction"].append(slam_time1-slam_time0) 
             slam_times["correction"].append(slam_time3 - slam_time2)
@@ -238,25 +283,27 @@ class RunBetterFaster:
             processing_time = time.time() - t0 
 
             #3f. plot 
+            plot_time0 = time.time() 
             plotter.plot_state(slam,t,estimated_pose,observations_t,clique_sim.posteriors,clique_sim.growth_state_estimates)
 
             if self.args.plotIntermediateResults:
-                plot_time0 = time.time() 
-                plot_time1 = time.time() 
+                plot_time1 = time.time()                  
                 plotting_times.append(plot_time1 - plot_time0)
                 if t == sim_length - 1: 
                     #close the plots 
                     plt.close() 
 
             if t > 10 and np.mod(t,10) == 0:
-                if self.args.verbose: 
-                    print("Mean SLAM prediction time: {}, Median SLAM predicition time: {}".format(np.mean(slam_times["prediction"]),np.median(slam_times["prediction"]))) 
-                    print("Mean SLAM correction time: {}, Median SLAM correction time: {}".format(np.mean(slam_times["correction"]),np.median(slam_times["correction"]))) 
-                    print("Mean CLIQUE time: {}, Median CLIQUE time: {}".format(np.mean(clique_times),np.median(clique_times)))
-                    #print("Mean Performance time: {}, Median Performance time: {}".format(np.mean(perf_times),np.median(perf_times))) 
-                    if self.args.plotIntermediateResults: 
-                        print("Mean Plotting time: {}, Median Plotting time: {}".format(np.mean(plotting_times),np.median(plotting_times)))
-            
+                #if self.args.verbose: 
+                print()
+                print("Mean SLAM prediction time: {}, Median SLAM predicition time: {}".format(np.mean(slam_times["prediction"]),np.median(slam_times["prediction"]))) 
+                print("Mean SLAM correction time: {}, Median SLAM correction time: {}".format(np.mean(slam_times["correction"]),np.median(slam_times["correction"]))) 
+                print("Mean CLIQUE time: {}, Median CLIQUE time: {}".format(np.mean(clique_times),np.median(clique_times)))
+                #print("Mean Performance time: {}, Median Performance time: {}".format(np.mean(perf_times),np.median(perf_times))) 
+                if self.args.plotIntermediateResults: 
+                    print("Mean Plotting time: {}, Median Plotting time: {}".format(np.mean(plotting_times),np.median(plotting_times)))
+                print() 
+
             if int_background_process is not None:
                 if int_background_process.is_alive(): 
                     int_background_process.join() 
@@ -266,22 +313,20 @@ class RunBetterFaster:
                 if np.mod(t,self.args.int_pickle_frequency) == 0 or t == sim_length - 1:
                     #Pickle intermediate results so we can load them in later if need be 
                     print("pickling intermediate results!")
-                    #int_background_process = multiprocessing.Process(target=pickle_intermediate_results_background, args=(performance_tracker,clique_sim, slam, t))
-                    performance_tracker.pickle_intermediate_results(clique_sim,slam,t)
-                    #int_background_process.start()
+                    #performance_tracker.pickle_intermediate_results(clique_sim,slam,t) #this is the old fashioned way to do it :) 
+                    int_background_process = multiprocessing.Process(target=pickle_intermediate_results_background, args=(performance_tracker,clique_sim, slam, t))
+                    int_background_process.start()
                     #input("This is the intermediate pickling step. Press Enter to Continue...")
 
         #4. Write results 
         if not self.args.skip_writing_results:
             if not (self.args.load_prev_exp_results and exp < self.args.start_experiment):  
-                '''
-                if not background_process is None: 
+                if not background_process is None:  
                     if background_process.is_alive():
                         background_process.join() 
-                '''
-                write_results(exp,self.parameters,performance_tracker,self.args.postProcessing_dirName)
-                #background_process = multiprocessing.Process(target=save_results_background,args=(exp,self.parameters,performance_tracker,self.args.postProcessing_dirName))
-                #background_process.start() 
+                #write_results(exp,self.parameters,performance_tracker,self.args.postProcessing_dirName)
+                background_process = multiprocessing.Process(target=save_results_background,args=(exp,self.parameters,performance_tracker,self.args.postProcessing_dirName))
+                background_process.start() 
             else:  
                 print("skipping writing results....")
 
